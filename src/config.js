@@ -60,7 +60,29 @@ export const DEFAULTS = {
     zMax: 120,
   },
   grid: {
-    nx: 110,                  // stock heightmap columns along X (axial)
-    nth: 120,                 // stock heightmap columns around circumference
+    // ADAPTIVE cylindrical heightmap (experimental): cell counts derive from
+    // the stock size so the physical cell stays ~constant instead of a fixed
+    // 110×120. Doubled resolution vs the original ~1.83 × 1.31 mm cells.
+    cellAxial: 0.9,    // mm per column along X (axial)
+    cellArc: 0.65,     // mm per sector along the circumference
+    nxMin: 32,         // clamp tiny stocks (and keep huge ones renderable)
+    nthMin: 48,
+    nxMax: 400,
+    nthMax: 360,
   },
 };
+
+/**
+ * Adaptive grid resolution for a stock: keeps the heightmap cell close to
+ * `cellAxial × cellArc` mm whatever the stock size, clamped to sane bounds.
+ * Default 200 × Ø50 stock → 224 × 242 ≈ 54k cells (was 110 × 120 ≈ 13k).
+ */
+export function gridFor(length, R0) {
+  const g = DEFAULTS.grid;
+  const nx = Math.round(length / g.cellAxial) + 1;
+  const nth = Math.round((2 * Math.PI * R0) / g.cellArc);
+  return {
+    nx: Math.min(Math.max(nx, g.nxMin), g.nxMax),
+    nth: Math.min(Math.max(nth, g.nthMin), g.nthMax),
+  };
+}

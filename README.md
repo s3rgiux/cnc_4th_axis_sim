@@ -176,9 +176,12 @@ format and rotary limits for your specific controller.
 
 ## Performance
 
-~13k stock vertices rebuilt every frame plus a 110×120 heatmap redraw:
-comfortably 60 fps on any GPU-accelerated browser (the headless CI checks here
-run on SwiftShader software GL and still drive the full app at ~11 fps).
+The stock heightmap is **adaptive** (`gridFor()` in `src/config.js`): cell
+counts derive from the stock size to keep cells ≈ 0.9 × 0.65 mm — the default
+200 × Ø50 bar is a 223×242 map (~54k vertices rebuilt per frame plus the same
+heatmap redraw; experimental doubled resolution vs the original fixed
+110×120). Comfortably 60 fps on any GPU-accelerated browser (the headless CI
+checks here run on SwiftShader software GL and are frame-rate bound anyway).
 
 ## License
 

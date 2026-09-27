@@ -121,6 +121,10 @@ src/config.js             DEFAULTS for every parameter
 ### CylindricalStock (stock/stock.js)
 - Grid `nx × nth`; `radii` is `Float32Array(nx·nth)`, `radii[i·nth+j]` = radius
   at axial column `i` and circumferential sector `j`.
+- Resolution is **adaptive**: `config.gridFor(length, R0)` sizes the grid so a
+  cell stays ≈ `cellAxial × cellArc` mm (currently 0.9 × 0.65 — doubled vs the
+  original fixed 110×120), clamped by `nxMin/nthMin/nxMax/nthMax`. Every
+  consumer (stock, mesh import projection, 2D image) takes the grid from there.
 - Cutting solves the exact **flat / ball / V-bit** profile intersection
   analytically (no raycasting) and only ever cuts **down** → removal is
   monotone and idempotent. This is what makes backward scrub legal: reset +

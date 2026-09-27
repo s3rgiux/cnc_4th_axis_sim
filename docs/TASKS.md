@@ -45,6 +45,12 @@ node serve.mjs 8090 & node verify.mjs   # headless browser smoke test
 - [x] 2D target iso-contour "blueprint" layer — `scene/view2d.js`
 - [x] Node test suite (30) + headless browser `verify.mjs`
 
+- [x] **Adaptive heightmap grid** (experimental): `config.gridFor(L, R0)` keeps
+      cells ≈ 0.9 × 0.65 mm whatever the stock (default bar → 223×242 ≈ 54k
+      cells, 4× the old fixed 110×120) so the Ø1 detailing pass finally has
+      sub-millimetre geometry to carve into. Rollback knob: the cell targets +
+      clamps live in one place (`DEFAULTS.grid`).
+
 ---
 
 ## Roadmap — prioritized

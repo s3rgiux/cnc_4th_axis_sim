@@ -6,7 +6,7 @@
  * rendering and, when playing, advances the simulation clock at feed rate ×
  * speed multiplier.
  */
-import { DEFAULTS } from './config.js';
+import { DEFAULTS, gridFor } from './config.js';
 import { makeDesign } from './core/profiles.js';
 import { parseSTL, parseOBJ, projectToCylinder, makeHeightmapDesign } from './core/mesh.js';
 import { generateProgram } from './core/toolpath.js';
@@ -114,8 +114,9 @@ async function importMesh(name, buffer) {
       : parseSTL(buffer);
     const L = clamp(params.stock.length || 200, 10, 360);
     const R0 = clamp(params.stock.diameter || 50, 6, 120) / 2;
+    const grid = gridFor(L, R0);
     importedProj = projectToCylinder(tris.pos, tris.count, {
-      length: L, R0, nx: DEFAULTS.grid.nx, nth: DEFAULTS.grid.nth,
+      length: L, R0, nx: grid.nx, nth: grid.nth,
     });
     importedProj.name = name;
     params.design.profile = 'imported';
@@ -123,7 +124,7 @@ async function importMesh(name, buffer) {
     ui.setProfile('imported');
     rebuild(
       `${name}: ${tris.count.toLocaleString()} tris unrolled to a ` +
-      `${DEFAULTS.grid.nx}×${DEFAULTS.grid.nth} (V×U) design map — axis ${importedProj.meta.axis.toUpperCase()}, ` +
+      `${grid.nx}×${grid.nth} (V×U) design map — axis ${importedProj.meta.axis.toUpperCase()}, ` +
       `scale ${importedProj.meta.scaleAxis}×`,
     );
   } catch (err) {
@@ -188,7 +189,8 @@ function rebuild(okMsg) {
   segToLine = buildSegToLine(gcodeData.lines, program.segments.length);
 
   // Stock geometry + simulator
-  stock.resize(L, R0, DEFAULTS.grid.nx, DEFAULTS.grid.nth);
+  const grid = gridFor(L, R0);
+  stock.resize(L, R0, grid.nx, grid.nth);
   sim.setTools(params.tools);
   sim.feeds = params.feeds;
   sim.load(program, { design, clearance: params.clearance, limits: params.machine });
@@ -323,12 +325,8 @@ function frame(now) {
 ui = new UI(params, handlers);
 view3d = new View3D($('v3d'));
 view2d = new View2D($('v2d'));
-stock = new CylindricalStock(
-  params.stock.length,
-  params.stock.diameter / 2,
-  DEFAULTS.grid.nx,
-  DEFAULTS.grid.nth,
-);
+const g0 = gridFor(params.stock.length, params.stock.diameter / 2);
+stock = new CylindricalStock(params.stock.length, params.stock.diameter / 2, g0.nx, g0.nth);
 sim = new Simulator(stock, params.tools, params.feeds);
 sim.onUpdate = onPose;
 view2d.onSeek = (d) => {
