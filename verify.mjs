@@ -193,6 +193,68 @@ await page.waitForTimeout(600);
 const playingNow = await page.evaluate(() => document.getElementById('btn-play').textContent);
 step(`Space → play button shows "${playingNow}"`);
 
+// --- M1: carriage frame must never enter the swept stock circle -------------------------
+// World frame: rotary axis = world X at y=0,z=0; swept stock = cylinder radius R0 over
+// x∈[0,L]. For each structural carriage member, over the full carriage travel, its box's
+// min distance from the X axis (hypot of the y/z signed gaps) must stay ≥ R0. A negative
+// control (a frame member dropped onto the axis) proves the detector fires.
+async function setStock(len, dia) {
+  await page.evaluate(([len, dia]) => {
+    for (const [id, v] of [['num-len', len], ['num-dia', dia]]) {
+      const el = document.getElementById(id); el.value = String(v);
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }, [len, dia]);
+  await page.waitForTimeout(400);
+}
+async function scanFrame(label) {
+  const r = await page.evaluate(() => {
+    const { view3d, stock } = window.__dbg;
+    const m = view3d.machine;
+    const L = stock.length, R0 = stock.R0;
+    const aabb = (mesh) => {
+      const p = mesh.geometry.attributes.position, e = mesh.matrixWorld.elements;
+      let ny = Infinity, xy = -Infinity, nz = Infinity, xz = -Infinity, nx = Infinity, xx = -Infinity;
+      for (let i = 0; i < p.count; i++) {
+        const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+        const wx = e[0] * x + e[4] * y + e[8] * z + e[12];
+        const wy = e[1] * x + e[5] * y + e[9] * z + e[13];
+        const wz = e[2] * x + e[6] * y + e[10] * z + e[14];
+        if (wx < nx) nx = wx; if (wx > xx) xx = wx;
+        if (wy < ny) ny = wy; if (wy > xy) xy = wy;
+        if (wz < nz) nz = wz; if (wz > xz) xz = wz;
+      }
+      return [nx, xx, ny, xy, nz, xz];
+    };
+    const hits = [];
+    for (const f of [0, 0.25, 0.5, 0.75, 1]) {
+      m.carriage.position.x = f * L; view3d.scene.updateMatrixWorld(true);
+      for (const mesh of m.frameMeshes) {
+        const [x0, x1, y0, y1, z0, z1] = aabb(mesh);
+        const dy = y0 > 0 ? y0 : (y1 < 0 ? -y1 : 0), dz = z0 > 0 ? z0 : (z1 < 0 ? -z1 : 0);
+        if (x1 > -0.05 && x0 < L + 0.05 && Math.hypot(dy, dz) < R0 - 0.05) hits.push(mesh.geometry.type);
+      }
+    }
+    // negative control: clone a member onto the axis; the detector MUST flag it.
+    m.carriage.position.x = L / 2;
+    const bad = m.frameMeshes[m.frameMeshes.length - 1].clone();
+    bad.position.set(0, 0, 0); m.carriage.add(bad); m.frameMeshes.push(bad);
+    view3d.scene.updateMatrixWorld(true);
+    const [bx0, bx1, by0, by1, bz0, bz1] = aabb(bad);
+    const dy = by0 > 0 ? by0 : (by1 < 0 ? -by1 : 0), dz = bz0 > 0 ? bz0 : (bz1 < 0 ? -bz1 : 0);
+    const ctl = (bx1 > -0.05 && bx0 < L + 0.05) && Math.hypot(dy, dz) < R0 - 0.05;
+    m.frameMeshes.pop(); m.carriage.remove(bad);
+    return { L, R0, hits, ctlOk: ctl };
+  });
+  step(`carriage frame clear: L=${r.L} R0=${r.R0} — violations=${r.hits.length}${r.hits.length ? '(' + r.hits.join(',') + ')' : ''}, control=${r.ctlOk ? 'ok' : 'BROKEN'}`);
+  if (r.hits.length) errors.push(`carriage collides with stock (L=${r.L},R0=${r.R0}): ${r.hits.join(',')}`);
+  if (!r.ctlOk) errors.push('carriage collision detector did not fire on injected overlap — check is broken');
+}
+for (const [len, dia] of [[200, 50], [360, 120], [10, 6]]) {
+  await setStock(len, dia);
+  await scanFrame(`L${len}xD${dia}`);
+}
+
 await browser.close();
 
 if (errors.length) {

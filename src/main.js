@@ -283,3 +283,6 @@ speedMult = [0.1, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 50][Number($('sl-speed').value)
 
 rebuild('Ready — press ▶ to machine');
 requestAnimationFrame(frame);
+
+// QA/test hook (read-only): lets external scripts inspect scene geometry.
+window.__dbg = { view3d, view2d, stock, sim, params, get program() { return program; } };

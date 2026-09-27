@@ -111,8 +111,9 @@ export class View3D {
 
   resetView(L = 200) {
     this._frameL = L;
-    this.camera.position.set(L * 1.05, -L * 1.25, L * 0.95);
-    this.controls.target.set(L / 2, 0, 0);
+    // pull back + raise target so the overhead gantry (top ≈ z 184) stays framed
+    this.camera.position.set(L * 1.35, -L * 1.62, L * 1.18);
+    this.controls.target.set(L / 2, 0, 40);
     this.controls.update();
   }
 

@@ -5,6 +5,13 @@
  * World conventions (see unroll.js): rotary axis = world X at y=0,z=0; tool
  * axis vertical through world y=0; tool tip at (X, 0, Z). Everything here is
  * cosmetic — the kinematics live in sim/stock, this just follows them.
+ *
+ * Carriage = overhead gantry (M1): two side posts + bridge sized so their
+ * inner faces sit outside the maximum stock swing radius (60 mm, diameter
+ * input ≤ 120). The carriage can therefore travel the full bed length at any
+ * stock length without any solid member crossing the swept circle of the
+ * work. Z-feed is a telescoping quill + cutter descending from the fixed
+ * spindle housing under the bridge; nothing solid passes beside the axis.
  */
 import * as THREE from 'three';
 
@@ -22,16 +29,28 @@ const BED_LEN = 700;       // generous fixed bed, covers stock up to ~450 mm
 const FLOOR_Z = -150;      // top of bed / grid plane
 const RAIL_Y = 42;
 
+// Gantry envelope (M1). Post inner faces must stay outside the swept circle.
+const SWING_MAX = 60;      // max stock radius the sim allows (Ø ≤ 120)
+const POST_Y = 90;         // post centre y; inner face at 82 > SWING_MAX ✓
+const POST_BOTTOM = FLOOR_Z + 22;              // saddle top
+const BRIDGE_Z = 170;      // bridge centre, spans 156..184 (≫ SWING_MAX ✓)
+const POST_TOP = BRIDGE_Z - 14;
+const HOUSING_Z = 131;     // spindle housing centre, spans 104..158
+const QUILL_TOP = 98;      // bottom of the spindle nose bore (fixed)
+const COLLET_TOP = 43;     // local z of the collet top, above the tip
+
 function box(w, h, d, mat) {
   return new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
 }
 function cylX(r, len, mat, segs = 28) {
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, segs), mat);
-  m.rotation.z = Math.PI / 2; // cylinder default axis Y → rotate to X
-  return m;
+  const g = new THREE.CylinderGeometry(r, r, len, segs);
+  g.rotateZ(Math.PI / 2); // cylinder default axis Y → X (baked into verts)
+  return new THREE.Mesh(g, mat);
 }
 function cylZ(r, len, mat, segs = 24) {
-  return new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, segs), mat);
+  const g = new THREE.CylinderGeometry(r, r, len, segs);
+  g.rotateX(Math.PI / 2); // axis Y → Z: tool/spindle axis is world Z
+  return new THREE.Mesh(g, mat);
 }
 
 export class MachineModel {
@@ -74,38 +93,56 @@ export class MachineModel {
     const tb = new THREE.Mesh(new THREE.BoxGeometry(44, 80, 170), MAT.cast);
     tb.position.set(30, 0, -65); // rests on the bed, reaches just past the axis
     this.tailstock.add(tb);
-    const quill = cylX(7, 34, MAT.rail);
-    quill.position.set(-2, 0, 0);
-    this.tailstock.add(quill);
+    const tq = cylX(7, 34, MAT.rail); // tailstock quill
+    tq.position.set(-2, 0, 0);
+    this.tailstock.add(tq);
     const center = new THREE.Mesh(new THREE.ConeGeometry(9, 16, 20), MAT.metal);
-    center.rotation.z = Math.PI / 2; // cone apex (+Y default) now points −X
+    center.geometry.rotateZ(Math.PI / 2); // cone apex (+Y default) now points −X
     center.position.set(-12, 0, 0);
     this.tailstock.add(center);
     this.group.add(this.tailstock);
 
-    // ---- carriage: rides the rails in X, head rides the ram in Z ------------
+    // ---- carriage: overhead gantry straddling the work ----------------------
     this.carriage = new THREE.Group();
-    const saddle = box(56, 110, 22, MAT.cast);
+    this.frameMeshes = []; // structural members that must never enter the swept circle
+    const frame = (mesh) => { this.frameMeshes.push(mesh); return mesh; };
+
+    const saddle = frame(box(56, 110, 22, MAT.cast));
     saddle.position.set(0, 0, FLOOR_Z + 11); // saddle top at FLOOR_Z+22
     this.carriage.add(saddle);
-    const ram = box(26, 30, 330, MAT.metal);
-    ram.position.set(18, 0, FLOOR_Z + 22 + 165); // rises to z≈+200
-    this.carriage.add(ram);
 
-    // spindle head + tool group: positioned at (0,0,Z), Z == machine Z
+    const crossPlate = frame(box(60, 2 * POST_Y + 20, 14, MAT.cast));
+    crossPlate.position.set(0, 0, POST_BOTTOM + 7); // spans below the work
+    this.carriage.add(crossPlate);
+
+    const postH = POST_TOP - POST_BOTTOM;
+    for (const sy of [-POST_Y, POST_Y]) {
+      const post = frame(box(22, 16, postH, MAT.cast));
+      post.position.set(0, sy, (POST_TOP + POST_BOTTOM) / 2);
+      this.carriage.add(post);
+    }
+
+    const bridge = frame(box(50, 2 * POST_Y + 32, 28, MAT.cast));
+    bridge.position.set(0, 0, BRIDGE_Z);
+    this.carriage.add(bridge);
+
+    // spindle housing + nose bore: fixed under the bridge (Z-feed = quill)
+    const housing = frame(box(46, 58, 54, MAT.accent));
+    housing.position.set(0, 0, HOUSING_Z);
+    this.carriage.add(housing);
+    const nose = frame(cylZ(14, 14, MAT.metal));
+    nose.position.set(0, 0, QUILL_TOP + 7); // bore the quill slides through
+    this.carriage.add(nose);
+
+    // telescoping quill: unit-height cylinder along Z, scaled per frame
+    this.quill = cylZ(7, 1, MAT.metal, 20);
+    this.carriage.add(this.quill);
+
+    // Z head: collet + cutter ride here, origin == tool tip (X, 0, Z)
     this.headZ = new THREE.Group();
-    const headBox = box(40, 52, 64, MAT.accent);
-    headBox.position.set(2, 0, 34);
-    this.headZ.add(headBox);
-    const spindle = cylZ(11, 26, MAT.metal);
-    spindle.position.set(0, 0, -4);
-    this.headZ.add(spindle);
-    const collet = new THREE.Mesh(new THREE.CylinderGeometry(8, 5.5, 10, 20), MAT.metal);
-    collet.position.set(0, 0, -21);
-    this.headZ.add(collet);
     this.carriage.add(this.headZ);
 
-    // cutter mesh rebuilt whenever tool type/diameter changes
+    // collet + cutter meshes rebuilt whenever tool type/diameter changes
     this.toolGroup = new THREE.Group();
     this.headZ.add(this.toolGroup);
 
@@ -121,7 +158,7 @@ export class MachineModel {
     this.tailstock.position.x = L + 20;
   }
 
-  /** Rebuild cutter mesh: flat cylinder or ball-nose (sphere + shank). */
+  /** Rebuild collet + cutter: flat cylinder or ball-nose (sphere + shank). */
   setTool(type, diameter) {
     while (this.toolGroup.children.length) {
       const c = this.toolGroup.children[0];
@@ -134,7 +171,7 @@ export class MachineModel {
       const ball = new THREE.Mesh(new THREE.SphereGeometry(R, 20, 14), MAT.tool);
       ball.position.z = R; // sphere bottom touches z=0 (the tip plane)
       this.toolGroup.add(ball);
-      const shank = cylZ(R * 0.92, len, MAT.tool);
+      const shank = cylZ(Math.max(R * 0.92, 1.2), len, MAT.tool);
       shank.position.z = R + len / 2 - 2;
       this.toolGroup.add(shank);
     } else {
@@ -142,12 +179,29 @@ export class MachineModel {
       mill.position.z = len / 2;
       this.toolGroup.add(mill);
     }
+    // collet nut gripping the shank just above the cutter
+    const collet = new THREE.Mesh(
+      new THREE.CylinderGeometry(9.5, Math.max(R + 1, 5.5), 14, 20), MAT.metal,
+    );
+    collet.geometry.rotateX(Math.PI / 2); // axis → Z
+    collet.position.z = COLLET_TOP - 7;   // spans ~29..43 above the tip
+    this.toolGroup.add(collet);
   }
 
   /** Follow the simulated machine pose. */
   updatePose(x, z) {
     this.carriage.position.x = x;
     this.headZ.position.z = z;
+    // quill spans from the fixed nose bore down to the travelling collet top
+    const bottom = z + COLLET_TOP;
+    const len = QUILL_TOP - bottom;
+    if (len > 1.5) {
+      this.quill.visible = true;
+      this.quill.scale.z = len;
+      this.quill.position.z = (QUILL_TOP + bottom) / 2;
+    } else {
+      this.quill.visible = false; // fully retracted into the spindle nose
+    }
     this.tipDot.position.set(x, 0, z);
   }
 }

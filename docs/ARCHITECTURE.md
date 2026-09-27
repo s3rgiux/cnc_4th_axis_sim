@@ -98,7 +98,10 @@ src/app/
 src/scene/
   view3d.js               View3D: rotor, live stock mesh, ghost, path overlays
   view2d.js               View2D: heatmap, target contours, cursor, click-seek
-  machine.js              MachineModel: bed/chuck/tailstock/carriage visuals
+  machine.js              MachineModel: bed/chuck/tailstock + overhead-gantry
+                          carriage (posts/bridge clear max swing; Z-feed via
+                          telescoping quill). frameMeshes tag = structural
+                          members verified collision-free by verify.mjs.
                           (cosmetic — see TASKS.md M-series for realism work)
 src/main.js               bootstrap: state, handlers, rebuild() wiring
 src/config.js             DEFAULTS for every parameter

@@ -43,49 +43,44 @@ These are all in `src/scene/machine.js` (cosmetic-only today — kinematics are
 correct, the *props* just don't sit where a real machine's would). None of
 them affect the toolpath math; they affect believability and safety-checking.
 
-**M1 — Carriage must clear the stock's swept circle (the X-move collision).**
-- **Symptom:** the carriage ram is a `box(26,30,330)` standing at `y≈0`,
-  i.e. dead center in the plane that contains the rotary axis. The spinning
-  stock sweeps a cylinder of radius `R0` around world X, so whenever the
-  carriage's ram X differs from the cut X, the column visually intersects /
-  passes through the part. This is the "lathe colliding with the material"
-  report.
-- **Real machines:** a 4th-axis router reaches the cylinder from **above** on
-  a cantilever / C-frame / gantry whose vertical structure lives entirely
-  **outside** the rotation envelope (beyond `y = ±(R0 + clearance)`). The
-  spindle approaches along −Z; nothing solid occupies the swept disc.
-- **Fix sketch:** rebuild the carriage as an overhead bridge: two side posts
-  at `y = ±(maxR0 + margin)` riding the rails, a cross beam above the axis
-  (`z ≈ +R0 + headroom`), and the Z-slide + spindle hanging off the beam over
-  the work. `updatePose(x,z)` stays the same; only the geometry offsets move.
-  Alternatively a rear-mounted C-frame. Acceptance: at any (X,Z) in a full
-  program the carriage meshes never overlap a sphere of radius `R0` around the
-  X axis between `x=0..L`.
-- Touch: `src/scene/machine.js`. Optional `src/config.js` `machine:{}` block
-  for clearance/headroom instead of hard-coded constants.
+**M1 — Carriage must clear the stock's swept circle (the X-move collision). ✅ DONE.**
+- Was: a ram column standing at `y≈0`, dead center in the plane containing the
+  rotary axis — the carriage visually passed through the spinning stock on
+  every X move.
+- Now: the carriage is an overhead gantry (`src/scene/machine.js`). Side
+  posts at `y = ±90` (inner faces 82 > max stock radius 60 = Ø120 slider
+  limit) ride the bed; the bridge spans `z 156..184` above the work; the
+  spindle housing + nose are fixed under the bridge; a telescoping quill +
+  collet + cutter on the moving `headZ` feed along −Z to the tip. `updatePose`
+  signature unchanged — it drives `carriage.x`, `headZ.z` and the quill
+  extension. Structural members are tagged in `machine.frameMeshes`.
+- Bonus fix found in the same sweep: `cylZ()` never rotated its geometry, so
+  the spindle/collet/cutter lay along world **Y** (a big reason the tool read
+  as invisible). All Z-axis cylinders now bake `rotateX(π/2)` into vertices;
+  the tool stack (cutter → collet → quill → nose → housing) is genuinely
+  vertical.
+- Acceptance is now a permanent `verify.mjs` step: every frame member's AABB
+  stays outside the swept cylinder across full travel for
+  {L200×Ø50, L360×Ø120, L10×Ø6}, plus a negative control proving the detector
+  fires.
 
-**M2 — Spindle must be visible and read as spinning.**
-- **Symptom:** spindle + collet (`cylZ`/cone) sit at local z −26..+9, mostly
-  swallowed by the 64 mm `headBox`; at 200 mm scene scale the whole nose is a
-  few px and it never rotates.
-- **Fix:** shrink/raise the head box so the collet protrudes below it; give
-  the spindle its own group that rotates about its axis. Real routers spin the
-  cutter very fast (visual blur), so a subtle emissive streak or a hashed
-  collet that visibly turns reads better than an accurate-but-invisible part.
-- Acceptance: spindle nose + collet clearly visible above the cutter in
-  `shots/`; optional spindle-RPM visual toggle.
-- Touch: `src/scene/machine.js` (`setTool`, `headZ`, `updatePose`).
+**M2 — Spindle must read as spinning.** (visibility half ✅ done by M1)
+- M1's rebuild already fixed visibility: the housing/nose sit fixed under the
+  bridge well above the work and the collet + quill protrude cleanly below.
+  What remains is motion — give the quill/collet/cutter a spin about Z while
+  `F>0` (or an emissive-streak / hashed-collet trick; real router RPM blurs
+  anyway, so a stylized spin reads better than an accurate invisible one).
+- Acceptance: visible spin in a cutting screenshot or toggleable
+  spindle-RPM visual.
+- Touch: `src/scene/machine.js` (+ tiny rAF dt hook from `view3d.js`).
 
-**M3 — Tool must be visible during cutting.**
-- **Symptom:** the cutter is drawn from the tip plane up 30 mm but is
-  immediately overlapped by the head/collet, and a 6 mm ball reads tiny
-  against a 200 mm part. In `shots/` it's effectively invisible.
-- **Fix:** make the shank exit the collet cleanly (no Z overlap), lengthen the
-  exposed flute, and add an optional cut-highlight (brief emissive flash or an
-  outline while `F>0` and material is being removed). Consider a chip/spark
-  sprite at the tip dot while feeding.
-- Acceptance: ball/flat tool silhouette clearly distinguishable from the head
-  in a fresh carve screenshot; tool visibly sits in the collet.
+**M3 — Tool must be clearly distinguishable while cutting.** (visibility ✅ done by M1; highlight pending)
+- The Z-orientation bug fix means the cutter now hangs visibly below the
+  collet with a clean tip dot; shots confirm it reads against the work.
+  Remaining niceties: an optional cut-highlight (emissive flash or outline
+  while material is being removed) and maybe a chip sprite at the tip.
+- Acceptance: tool visibly sits in the collet (done); optional highlight
+  toggle works while `F>0`.
 - Touch: `src/scene/machine.js`; `src/scene/view3d.js` only if the highlight
   is driven per-frame from the sim's `isCutting` state.
 
@@ -129,9 +124,9 @@ them affect the toolpath math; they affect believability and safety-checking.
 
 ### 🟢 Housekeeping / QA
 
-- [ ] Add `verify.mjs` assertions that the carriage never intersects the stock
+- [x] Add `verify.mjs` assertions that the carriage never intersects the stock
       envelope (turns M1's acceptance into a permanent browser check).
-- [ ] `npm test` / `npm run serve` scripts in `package.json` so contributors
+- [x] `npm test` / `npm run serve` scripts in `package.json` so contributors
       don't need to remember the node invocations.
 - [ ] Trim vendored three.js to the used modules to shrink the payload.
 - [ ] Accessibility: aria-labels on transport + DRO live region.
