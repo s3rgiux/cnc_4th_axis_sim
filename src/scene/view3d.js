@@ -86,6 +86,10 @@ export class View3D {
     this._groupOfSeg = null;
     this._lastDone = [-1, -1, -1];
 
+    // collision overlay (static analysis findings, drawn over everything)
+    this.collisionGroup = new THREE.Group();
+    this.rotor.add(this.collisionGroup);
+
     // ---- resize handling ---------------------------------------------------
     this._ro = new ResizeObserver(() => this.resizeNow());
     this._ro.observe(container);
@@ -271,6 +275,62 @@ export class View3D {
   setGroupVisible(name, visible) {
     const pair = this.pathMeshes[name];
     if (pair) { pair.all.visible = visible; pair.done.visible = visible; }
+  }
+
+  // -------------------------------------------------------------------------
+  // Collision overlay (static analysis findings → red in your face)
+  // -------------------------------------------------------------------------
+  /**
+   * Draw the static collision findings over the toolpath: each offending
+   * segment becomes a red line (rotor space, same transform as the paths)
+   * and each finding a floating marker dot. `depthTest:false` keeps them
+   * visible through the stock — these are warnings, not geometry.
+   */
+  setCollisions(segments, findings) {
+    for (const c of [...this.collisionGroup.children]) {
+      c.geometry.dispose();
+      c.material.dispose();
+      this.collisionGroup.remove(c);
+    }
+    if (!segments || !segments.length || !findings || !findings.length) return;
+    const home = { X: 0, Z: segments[0].Z, A: 0 };
+    const p0 = [0, 0, 0], p1 = [0, 0, 0];
+    const linePts = [], markerPts = [];
+    const seen = new Set();
+    for (const f of findings) {
+      const i = f.segIdx;
+      if (i == null || i < 0 || i >= segments.length) continue;
+      if (!seen.has(i)) {
+        seen.add(i);
+        const prev = i === 0 ? home : segments[i - 1];
+        const s = segments[i];
+        linePts.push(...tipToRotor(prev.X, prev.Z, prev.A, p0));
+        linePts.push(...tipToRotor(s.X, s.Z, s.A, p1));
+      }
+      if (f.X != null && f.Z != null && markerPts.length < 120) {
+        markerPts.push(...tipToRotor(f.X, f.Z, f.A || 0, p0));
+      }
+    }
+    if (linePts.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(linePts), 3));
+      const lines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+        color: 0xff3b4b, transparent: true, opacity: 0.95, depthTest: false,
+      }));
+      lines.frustumCulled = false;
+      lines.renderOrder = 11;
+      this.collisionGroup.add(lines);
+    }
+    if (markerPts.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(markerPts), 3));
+      const dots = new THREE.Points(geo, new THREE.PointsMaterial({
+        color: 0xff3b4b, size: 7, sizeAttenuation: true, depthTest: false, transparent: true, opacity: 0.95,
+      }));
+      dots.frustumCulled = false;
+      dots.renderOrder = 12;
+      this.collisionGroup.add(dots);
+    }
   }
 
   setGhostVisible(v) {

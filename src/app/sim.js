@@ -13,6 +13,9 @@
  * DOM-free.
  */
 import { moveDistance } from '../core/unroll.js';
+import { analyzeProgram } from '../core/collision.js';
+
+const CLEAN_ANALYSIS = { findings: [], counts: { gouge: 0, envelope: 0, overtravel: 0 }, ok: true, summary: '' };
 
 export class Simulator {
   /**
@@ -34,7 +37,13 @@ export class Simulator {
     this.tool = { R: Math.max(tool.diameter / 2, 0.01), ball: tool.type === 'ball' };
   }
 
-  load(program) {
+  /**
+   * Load a program and run the static collision analysis ONCE (advisory —
+   * playback is never affected).
+   * @param {object|null} program  { segments } from generateProgram()
+   * @param {object|null} ctx      { design, clearance, limits } for the checks
+   */
+  load(program, ctx = null) {
     this.prog = program;
     this.segs = program ? program.segments : [];
     const n = this.segs.length;
@@ -57,6 +66,14 @@ export class Simulator {
     this.dist = 0;
     this.curSeg = -1;
     this.pose = { ...h, F: 0, mode: 'G0', cutting: false };
+    this.analysis = (program && ctx)
+      ? analyzeProgram(program, {
+        design: ctx.design,
+        stock: { length: this.stock.length, R0: this.stock.R0 },
+        clearance: ctx.clearance,
+        limits: ctx.limits,
+      })
+      : CLEAN_ANALYSIS;
   }
 
   home() {

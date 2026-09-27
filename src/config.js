@@ -36,6 +36,12 @@ export const DEFAULTS = {
     rapid: 4000,
   },
   clearance: 4,               // Z travel above stock radius for rapids (mm)
+  machine: {                  // travel limits for the overtravel check (mm).
+    xMin: -5,                 //   A is deliberately unbounded: continuous
+    xMax: 450,                //   multi-turn rotary is the machine's feature.
+    zMin: 0.05,               //   (bed covers stock up to ~450; tool stops at axis)
+    zMax: 120,
+  },
   grid: {
     nx: 110,                  // stock heightmap columns along X (axial)
     nth: 120,                 // stock heightmap columns around circumference
