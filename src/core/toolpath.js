@@ -16,7 +16,7 @@
  * rough='indexed'  Rotary indexed roughing: descend one depth-of-cut level at
  *                  a time; at each level, rotate the stock to N fixed angles
  *                  and plow straight axial sweeps. Per-station Z is clamped to
- *                  max(level, target+allowance) → stair-step axial clearance.
+ *                  max(level, target+allowRough) → stair-step axial clearance.
  * rough='spiral'   Continuous spiral roughing: helix in (X, A) at each level,
  *                  same staircase clamp. Far fewer retract moves.
  * finish='helical' Continuous helical finishing: A turns at constant pitch
@@ -25,6 +25,10 @@
  * finish='raster'  Parallel raster finishing planned purely in 2D: constant-U
  *                  sweeps along V at `stepover` spacing, each re-mapped to a
  *                  fixed A index with Z flying over the target surface.
+ * detail           Optional third phase: the finishing pass shape again, with
+ *                  the smaller detailing tool, its own pitch/feed and its own
+ *                  (tighter) allowance — the finishing allowance detailing
+ *                  will eat.
  *
  * DOM-free: safe to import from Node tests.
  */
@@ -79,16 +83,25 @@ class PathBuilder {
  * @param {object} input
  * @param {object} input.design    from makeDesign()
  * @param {object} input.stock     { length, R0 }
- * @param {object} input.tool      { type, diameter, stepover, doc, allowance }
- * @param {object} input.strategy  { rough, roughPitch, indexes, finish, pitch, angularStep }
- * @param {object} input.feeds     { rough, finish, rapid }
+ * @param {object} input.tools     { rough, finish, detail } each
+ *                                 { type:'flat'|'ball'|'vbit', diameter, angle,
+ *                                   doc?|stepover? }
+ * @param {object} input.allowance { rough, finish, detail } stock left above
+ *                                 the design surface after each phase (mm)
+ * @param {object} input.strategy  { rough, roughPitch, indexes, finish, pitch,
+ *                                   angularStep, detail, detailPitch }
+ * @param {object} input.feeds     { rough, finish, detail, rapid }
  * @param {number} input.clearance rapid height above stock radius
  * @returns {{segments: Array, stats: object}}
  */
-export function generateProgram({ design, stock, tool, strategy, feeds, clearance }) {
+export function generateProgram({ design, stock, tools, allowance = {}, strategy, feeds, clearance }) {
   const { length: L, R0 } = stock;
-  const Rt = Math.max(tool.diameter / 2, 0.05);
-  const allow = Math.max(tool.allowance, 0);
+  const roughT = tools.rough || {};
+  const finishT = tools.finish || {};
+  const detailT = tools.detail || {};
+  const allowRough = Math.max(allowance.rough ?? 0, 0);
+  const allowFinish = Math.max(allowance.finish ?? 0, 0);
+  const allowDetail = Math.max(allowance.detail ?? 0, 0);
   const Zc = R0 + clearance;               // rapid / clearance height
   const x0 = 0, x1 = L;
   const astep = Math.max(0.25, strategy.angularStep || 2);
@@ -98,21 +111,22 @@ export function generateProgram({ design, stock, tool, strategy, feeds, clearanc
 
   // ---------------------------------------------------------------- levels
   // Radial step-down levels shared by both roughing strategies. The final
-  // level snaps to (min target + allowance) so no stub is left for the
+  // level snaps to (min target + rough allowance) so no stub is left for the
   // finishing pass to dig into.
-  const minZ = design.minTarget() + allow;
-  const doc = Math.max(0.2, tool.doc);
+  const minZ = design.minTarget() + allowRough;
+  const doc = Math.max(0.2, roughT.doc ?? 3);
   const levels = [];
   if (strategy.rough) {
     for (let zk = R0 - doc; zk > minZ + 1e-6; zk -= doc) levels.push(zk);
     if (!levels.length || levels[levels.length - 1] > minZ + 0.05) levels.push(Math.max(minZ, 0.5));
   }
 
-  /** Staircase clamp: never break past the local target + allowance. */
-  const effZ = (zk, u, v) => Math.max(zk, design.targetRadius(u, v) + allow);
+  /** Staircase clamp: never break past the local target + rough allowance. */
+  const effZ = (zk, u, v) => Math.max(zk, design.targetRadius(u, v) + allowRough);
 
   // ------------------------------------------------------- indexed rough
   if (strategy.rough === 'indexed') {
+    const Rt = Math.max((roughT.diameter ?? 10) / 2, 0.05);
     const N = Math.max(3, strategy.indexes | 0);
     const chord = Math.max(1.5, Rt * 1.2);
     for (const zk of levels) {
@@ -131,7 +145,7 @@ export function generateProgram({ design, stock, tool, strategy, feeds, clearanc
 
   // -------------------------------------------------------- spiral rough
   if (strategy.rough === 'spiral') {
-    const pitch = Math.max(0.5, strategy.roughPitch || tool.stepover * 2);
+    const pitch = Math.max(0.5, strategy.roughPitch || 4);
     for (const zk of levels) {
       b.rapid(x0, Zc, null, 'rough');
       b.cut(x0, effZ(zk, uFromA(b.curA, R0), x0), null, feeds.rough, 'rough');
@@ -152,40 +166,65 @@ export function generateProgram({ design, stock, tool, strategy, feeds, clearanc
     }
   }
 
-  // ------------------------------------------------------ helical finish
-  if (strategy.finish === 'helical') {
-    const pitch = Math.max(0.25, strategy.pitch);
-    b.rapid(x0, Zc, null, 'finish');
-    b.cut(x0, design.targetRadius(uFromA(b.curA, R0), x0), null, feeds.finish, 'finish');
-    const aStart = b.curA;
-    const total = 360 * ((x1 - x0) / pitch);
-    const n = Math.ceil(total / astep);
-    let prevDa = 0;
-    for (let i = 1; i <= n; i++) {
-      const da = Math.min(i * astep, total);   // final block lands exactly on x1
-      if (da === prevDa) continue;
-      const X = Math.min(x0 + (pitch * da) / 360, x1);
-      const a = aStart + da;
-      b.cut(X, design.targetRadius(uFromA(a, R0), X), a, feeds.finish, 'finish');
-      prevDa = da;
-    }
-    b.rapid(x1, Zc, null, 'finish');
-  }
-
-  // ------------------------------------------------------- raster finish
-  if (strategy.finish === 'raster') {
-    const stepover = Math.max(0.25, tool.stepover);
-    const circ = circumference(R0);
-    const stepV = Math.max(1.5, Rt * 1.2);
-    for (let U = 0; U < circ - 1e-6; U += stepover) {
-      b.rapid(x0, Zc, aFromU(U, R0), 'finish');   // index rotary to this raster line
-      b.cut(x0, design.targetRadius(U, x0), null, feeds.finish, 'finish');
-      for (let x = x0 + stepV; x < x1; x += stepV) {
-        b.cut(x, design.targetRadius(U, x), null, feeds.finish, 'finish');
+  // ------------------------------------------------- finishing pass shape
+  // Shared by the finishing and detailing phases: same geometry, different
+  // tool / feed / pitch / allowance / group tag.
+  const contourPass = (style, { group, feed, allow, pitch, stepover, Rt }) => {
+    const floor = (u, v) => design.targetRadius(u, v) + allow;
+    if (style === 'helical') {
+      const p = Math.max(0.25, pitch);
+      b.rapid(x0, Zc, null, group);
+      b.cut(x0, floor(uFromA(b.curA, R0), x0), null, feed, group);
+      const aStart = b.curA;
+      const total = 360 * ((x1 - x0) / p);
+      const n = Math.ceil(total / astep);
+      let prevDa = 0;
+      for (let i = 1; i <= n; i++) {
+        const da = Math.min(i * astep, total);   // final block lands exactly on x1
+        if (da === prevDa) continue;
+        const X = Math.min(x0 + (p * da) / 360, x1);
+        const a = aStart + da;
+        b.cut(X, floor(uFromA(a, R0), X), a, feed, group);
+        prevDa = da;
       }
-      b.cut(x1, design.targetRadius(U, x1), null, feeds.finish, 'finish');
-      b.rapid(x1, Zc, null, 'finish');
+      b.rapid(x1, Zc, null, group);
+    } else if (style === 'raster') {
+      const so = Math.max(0.25, stepover);
+      const circ = circumference(R0);
+      const stepV = Math.max(1.5, Rt * 1.2);
+      for (let U = 0; U < circ - 1e-6; U += so) {
+        b.rapid(x0, Zc, aFromU(U, R0), group);   // index rotary to this raster line
+        b.cut(x0, floor(U, x0), null, feed, group);
+        for (let x = x0 + stepV; x < x1; x += stepV) {
+          b.cut(x, floor(U, x), null, feed, group);
+        }
+        b.cut(x1, floor(U, x1), null, feed, group);
+        b.rapid(x1, Zc, null, group);
+      }
     }
+  };
+
+  contourPass(strategy.finish, {
+    group: 'finish',
+    feed: feeds.finish,
+    allow: allowFinish,
+    pitch: strategy.pitch,
+    stepover: finishT.stepover ?? 2,
+    Rt: Math.max((finishT.diameter ?? 4) / 2, 0.05),
+  });
+
+  // ------------------------------------------------------------- detailing
+  // A second finishing pass with the small tool: it removes the finishing
+  // allowance and leaves only its own (usually near-zero) skin.
+  if (strategy.detail) {
+    contourPass(strategy.finish, {
+      group: 'detail',
+      feed: feeds.detail ?? feeds.finish,
+      allow: allowDetail,
+      pitch: strategy.detailPitch ?? 1,
+      stepover: detailT.stepover ?? 0.5,
+      Rt: Math.max((detailT.diameter ?? 1) / 2, 0.05),
+    });
   }
 
   // --------------------------------------------------------------- park

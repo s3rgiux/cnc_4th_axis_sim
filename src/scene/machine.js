@@ -158,8 +158,9 @@ export class MachineModel {
     this.tailstock.position.x = L + 20;
   }
 
-  /** Rebuild collet + cutter: flat cylinder or ball-nose (sphere + shank). */
-  setTool(type, diameter) {
+  /** Rebuild collet + cutter: flat cylinder, ball-nose (sphere + shank) or
+   *  V-bit (truncated cone widening at the included angle + shank). */
+  setTool(type, diameter, angle = 90) {
     while (this.toolGroup.children.length) {
       const c = this.toolGroup.children[0];
       c.geometry.dispose();
@@ -173,6 +174,19 @@ export class MachineModel {
       this.toolGroup.add(ball);
       const shank = cylZ(Math.max(R * 0.92, 1.2), len, MAT.tool);
       shank.position.z = R + len / 2 - 2;
+      this.toolGroup.add(shank);
+    } else if (type === 'vbit') {
+      // Truncated cone: tip flat radius R at z=0, flanks opening at angle/2.
+      const a = Math.min(Math.max(angle, 15), 170) * 0.5 * (Math.PI / 180);
+      const coneLen = 26;
+      const rTop = R + coneLen * Math.tan(a);
+      const coneGeo = new THREE.CylinderGeometry(rTop, R, coneLen, 24);
+      coneGeo.rotateX(Math.PI / 2); // +Y (wide end) → +Z: flanks open upward
+      const cone = new THREE.Mesh(coneGeo, MAT.tool);
+      cone.position.z = coneLen / 2;
+      this.toolGroup.add(cone);
+      const shank = cylZ(Math.min(Math.max(R * 0.92, 1.2), rTop), len, MAT.tool);
+      shank.position.z = coneLen + len / 2 - 2;
       this.toolGroup.add(shank);
     } else {
       const mill = cylZ(R, len, MAT.tool);

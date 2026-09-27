@@ -31,11 +31,21 @@ export function emitGcode(program, meta = {}) {
   // ---- header ------------------------------------------------------------
   const stock = meta.stock || {};
   const tool = meta.tool || {};
+  const toolName = (t) => (t.type === 'ball' ? 'BALL-NOSE'
+    : t.type === 'vbit' ? `V-BIT ${fmt1(t.angle ?? 90)}DEG`
+      : 'FLAT ENDMILL');
   push('%');
   push('(4TH-AXIS ROTARY SIMULATOR - SYNCHRONIZED X/Z/A PROGRAM)');
   if (meta.designName) push(`(DESIGN: ${meta.designName})`);
   push(`(STOCK: DIA ${fmt1((stock.diameter ?? 0))} X ${fmt1(stock.length ?? 0)} MM)`);
-  push(`(TOOL: T1 ${tool.type === 'ball' ? 'BALL-NOSE' : 'FLAT ENDMILL'} D=${fmt1(tool.diameter ?? 0)})`);
+  if (Array.isArray(meta.tools) && meta.tools.length) {
+    for (const t of meta.tools) {
+      const allow = t.allow == null ? '' : ` ALLOW=${fmt1(t.allow)}`;
+      push(`(TOOL: T${t.t} ${toolName(t)} D=${fmt1(t.diameter)}${t.phase ? ` ${t.phase}` : ''}${allow})`);
+    }
+  } else {
+    push(`(TOOL: T1 ${toolName(tool)} D=${fmt1(tool.diameter ?? 0)})`);
+  }
   if (meta.strategyText) push(`(STRATEGY: ${meta.strategyText})`);
   push('G21 (UNITS: MILLIMETRES)');
   push('G90 (ABSOLUTE POSITIONING)');

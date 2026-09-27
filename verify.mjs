@@ -43,14 +43,35 @@ const contA = await page.evaluate(() =>
 if (!contA) errors.push('no continuous (multi-turn) A values in G-code');
 step(`continuous A words: ${contA}`);
 
+// Three-phase tool header (rough / finish / detail)?
+const toolHdr = await page.evaluate(() =>
+  [...document.querySelectorAll('#term .ln')].filter((el) => /^\(TOOL: T\d/.test(el.textContent)).length);
+if (toolHdr < 3) errors.push(`expected 3 per-phase TOOL header lines, got ${toolHdr}`);
+step(`per-phase tool header lines: ${toolHdr}`);
+
 // --- play: material must be removed -------------------------------------------------
+// With 3-phase allowances the first roughing level legitimately rides above the
+// wide parts of the profile (no cut over the leg's foot), so play at 50× and
+// poll until the first real cut (cap ~15 s).
+await page.evaluate(() => {
+  const s = document.getElementById('sl-speed');
+  s.value = 9; s.dispatchEvent(new Event('input', { bubbles: true })); // 50×
+});
 await page.click('#btn-play');
-await page.waitForTimeout(2500);
-const playState = await page.evaluate(() => ({
-  a: parseFloat(document.getElementById('dro-a').textContent),
-  removed: parseFloat(document.getElementById('lbl-removed').textContent),
-}));
-step(`playing → A=${playState.a.toFixed(1)}° removed=${playState.removed.toFixed(2)} cm³`);
+let playState = { a: 0, removed: 0 };
+for (let i = 0; i < 30; i++) {
+  await page.waitForTimeout(500);
+  playState = await page.evaluate(() => ({
+    a: parseFloat(document.getElementById('dro-a').textContent),
+    removed: parseFloat(document.getElementById('lbl-removed').textContent),
+  }));
+  if (playState.removed > 0) break;
+}
+await page.evaluate(() => {
+  const s = document.getElementById('sl-speed');
+  s.value = 4; s.dispatchEvent(new Event('input', { bubbles: true })); // back to 2×
+});
+step(`playing 50× → A=${playState.a.toFixed(1)}° removed=${playState.removed.toFixed(2)} cm³`);
 if (!(playState.removed > 0)) errors.push('no material removed while playing');
 await page.screenshot({ path: OUT + '02-cutting-3d.png' });
 
@@ -166,7 +187,7 @@ await page.waitForTimeout(600);
 const pathOff = await page.evaluate(() => {
   const { view3d, view2d } = window.__dbg;
   return {
-    v3: ['rapid', 'rough', 'finish'].every((k) => !view3d.pathMeshes[k].all.visible && !view3d.pathMeshes[k].done.visible),
+    v3: ['rapid', 'rough', 'finish', 'detail'].every((k) => !view3d.pathMeshes[k].all.visible && !view3d.pathMeshes[k].done.visible),
     v2: Object.values(view2d.pathVisible).every((v) => !v),
     subsDisabled: document.getElementById('chk-p-rough').disabled,
   };
@@ -305,6 +326,40 @@ await page.waitForTimeout(400);
 await page.screenshot({ path: OUT + '10-collision-overlay.png' });
 await page.evaluate(() => window.__dbg.view3d.setCollisions(window.__dbg.program.segments, []));
 step('collision overlay rendered red then cleared (shots/10-collision-overlay.png)');
+
+// --- 3-phase tools: V-bit detailing + per-phase cutter in the spindle ----------------------
+// Switch the detailing cutter to a 60° V-bit; the program must regenerate with
+// a detail group, the status stay clean, and the spindle load the V-bit cone.
+await page.selectOption('#sel-dtool', 'vbit');
+await page.dispatchEvent('#sel-dtool', 'change');
+await page.waitForTimeout(1200);
+const vbit = await page.evaluate(() => {
+  const p = window.__dbg.program;
+  const det = p.segments.filter((s) => s.group === 'detail' && s.mode === 'G1');
+  return {
+    detail: det.length,
+    status: document.getElementById('status').textContent,
+    vbitPreview: document.getElementById('pv-detail').innerHTML.includes('V-BIT'),
+    angRow: document.getElementById('lbl-dang').style.display !== 'none',
+  };
+});
+if (!vbit.detail) errors.push('V-bit detailing produced no detail segments');
+if (/error/i.test(vbit.status)) errors.push(`V-bit detailing errored: ${vbit.status.trim()}`);
+if (!vbit.vbitPreview) errors.push('tool preview SVG did not update to the V-bit cross-section');
+if (!vbit.angRow) errors.push('V angle input not revealed when V-bit selected');
+step(`V-bit detailing: ${vbit.detail} detail blocks, preview + angle row live`);
+// Play the detailing phase to prove the per-phase cutter swaps in the spindle.
+await page.evaluate(() => {
+  const s = document.getElementById('sl-scrub');
+  s.value = 920; s.dispatchEvent(new Event('input', { bubbles: true }));
+});
+await page.waitForTimeout(1500);
+const phaseTool = await page.evaluate(() => ({
+  group: window.__dbg.sim.pose.group,
+  removed: parseFloat(document.getElementById('lbl-removed').textContent),
+}));
+step(`scrub 92% → group=${phaseTool.group} removed=${phaseTool.removed.toFixed(1)} cm³`);
+await page.screenshot({ path: OUT + '11-detail-vbit.png' });
 
 await browser.close();
 

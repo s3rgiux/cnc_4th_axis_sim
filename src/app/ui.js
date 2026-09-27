@@ -13,6 +13,49 @@ export function fmtTime(sec) {
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 }
 
+/**
+ * Side-view cross-section of a cutter as inline SVG (with dimensions), used
+ * as the live preview in each phase section. Shared scale across phases so the
+ * Ø10 → Ø4 → Ø1 progression reads visually.
+ */
+export function toolPreviewSvg(t, allow) {
+  const S = 6;                 // px per mm
+  const cx = 92, tipY = 58, bodyTop = 10;
+  const R = Math.max(t.diameter / 2, 0.05);
+  const dim = '#8b98ab';
+  const steel = '#7c8aa0';
+  let shape = '', label = '';
+  if (t.type === 'vbit') {
+    const a = Math.min(Math.max(t.angle || 90, 15), 170) * 0.5 * (Math.PI / 180);
+    const halfTop = Math.min(R + (tipY - bodyTop) / S * Math.tan(a), 40);
+    const halfTip = Math.max(R * S, 1.5);
+    shape = `<path d="M ${cx - halfTip} ${tipY} L ${cx - halfTop} ${bodyTop} L ${cx + halfTop} ${bodyTop} L ${cx + halfTip} ${tipY} Z"
+        fill="${steel}" stroke="#c3cddc" stroke-width="1"/>`;
+    label = `V-BIT ${t.angle || 90}° · TIP Ø${t.diameter}`;
+  } else if (t.type === 'ball') {
+    const r = Math.max(R * S, 2);
+    shape = `<path d="M ${cx - r} ${tipY - r} L ${cx - r} ${bodyTop} L ${cx + r} ${bodyTop} L ${cx + r} ${tipY - r}
+        A ${r} ${r} 0 0 1 ${cx - r} ${tipY - r} Z" fill="${steel}" stroke="#c3cddc" stroke-width="1"/>`;
+    label = `BALL-NOSE Ø${t.diameter}`;
+  } else {
+    const r = Math.max(R * S, 2);
+    shape = `<path d="M ${cx - r + 2} ${tipY} L ${cx + r - 2} ${tipY} L ${cx + r} ${tipY - 3} L ${cx + r} ${bodyTop}
+        L ${cx - r} ${bodyTop} L ${cx - r} ${tipY - 3} Z" fill="${steel}" stroke="#c3cddc" stroke-width="1"/>`;
+    label = `FLAT ENDMILL Ø${t.diameter}`;
+  }
+  const halfW = Math.max(R * S, 2) + (t.type === 'vbit' ? 14 : 0);
+  const dimY = tipY + 8;
+  return `
+    <line x1="12" y1="${tipY}" x2="176" y2="${tipY}" stroke="#33415a" stroke-dasharray="3 3"/>
+    ${shape}
+    <line x1="${cx - halfW}" y1="${dimY}" x2="${cx + halfW}" y2="${dimY}" stroke="${dim}" marker-start="url(#ar)" marker-end="url(#ar)"/>
+    <text x="182" y="24" fill="#cdd6e1" font-size="10" font-family="ui-monospace,monospace">${label}</text>
+    <text x="182" y="40" fill="${dim}" font-size="9" font-family="ui-monospace,monospace">leave ${allow} mm</text>
+    <text x="182" y="56" fill="${dim}" font-size="9" font-family="ui-monospace,monospace">Ø${t.diameter}${t.type === 'vbit' ? ` @ ${t.angle}°` : ''}</text>
+    <defs><marker id="ar" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+      <path d="M5 1 L1 3 L5 5" fill="none" stroke="${dim}"/></marker></defs>`;
+}
+
 export class UI {
   /**
    * @param {object} params shared parameter object (mutated in place)
@@ -39,9 +82,14 @@ export class UI {
     $('sel-pattern').innerHTML = PATTERNS.map((p) => `<option value="${p.id}">${p.name}</option>`).join('');
     $('sel-profile').value = this.params.design.profile;
     $('sel-pattern').value = this.params.design.pattern;
+    $('sel-rtool').value = this.params.tools.rough.type;
+    $('sel-ftool').value = this.params.tools.finish.type;
+    $('sel-dtool').value = this.params.tools.detail.type;
+    $('sel-detail').value = this.params.strategy.detail ? 'on' : 'off';
   }
 
   _bindPanel() {
+    // [param group (dot-path), key, type] per input.
     this.paramMap = {
       'num-len': ['stock', 'length', 'num'],
       'num-dia': ['stock', 'diameter', 'num'],
@@ -50,32 +98,56 @@ export class UI {
       'num-pcount': ['design', 'patternCount', 'num'],
       'num-pturns': ['design', 'patternTurns', 'num'],
       'num-pdepth': ['design', 'patternDepth', 'num'],
-      'sel-tool': ['tool', 'type', 'str'],
-      'num-tool-d': ['tool', 'diameter', 'num'],
-      'num-stepover': ['tool', 'stepover', 'num'],
-      'num-doc': ['tool', 'doc', 'num'],
-      'num-allow': ['tool', 'allowance', 'num'],
+      // roughing phase
       'sel-rough': ['strategy', 'rough', 'str'],
       'num-roughpitch': ['strategy', 'roughPitch', 'num'],
       'num-indexes': ['strategy', 'indexes', 'int'],
+      'sel-rtool': ['tools.rough', 'type', 'str'],
+      'num-rdia': ['tools.rough', 'diameter', 'num'],
+      'num-rang': ['tools.rough', 'angle', 'num'],
+      'num-rdoc': ['tools.rough', 'doc', 'num'],
+      'num-rallow': ['allowance', 'rough', 'num'],
+      // finishing phase
       'sel-finish': ['strategy', 'finish', 'str'],
       'num-pitch': ['strategy', 'pitch', 'num'],
       'num-astep': ['strategy', 'angularStep', 'num'],
+      'num-fstep': ['tools.finish', 'stepover', 'num'],
+      'sel-ftool': ['tools.finish', 'type', 'str'],
+      'num-fdia': ['tools.finish', 'diameter', 'num'],
+      'num-fang': ['tools.finish', 'angle', 'num'],
+      'num-fallow': ['allowance', 'finish', 'num'],
+      // detailing phase
+      'sel-detail': ['strategy', 'detail', 'bool'],
+      'num-dpitch': ['strategy', 'detailPitch', 'num'],
+      'num-dstep': ['tools.detail', 'stepover', 'num'],
+      'sel-dtool': ['tools.detail', 'type', 'str'],
+      'num-ddia': ['tools.detail', 'diameter', 'num'],
+      'num-dang': ['tools.detail', 'angle', 'num'],
+      'num-dallow': ['allowance', 'detail', 'num'],
+      // feeds
       'num-frough': ['feeds', 'rough', 'num'],
       'num-ffinish': ['feeds', 'finish', 'num'],
+      'num-fdetail': ['feeds', 'detail', 'num'],
       'num-frapid': ['feeds', 'rapid', 'num'],
     };
     for (const id of Object.keys(this.paramMap)) {
       $(id).addEventListener('change', () => {
         this.readParams();
+        this._refreshToolPreviews();
         this._scheduleRegen();
       });
     }
-    const syncIdxVis = () => {
+    const syncVis = () => {
       $('lbl-indexes').style.display = $('sel-rough').value === 'indexed' ? '' : 'none';
+      for (const [sel, lbl] of [['sel-rtool', 'lbl-rang'], ['sel-ftool', 'lbl-fang'], ['sel-dtool', 'lbl-dang']]) {
+        $(lbl).style.display = $(sel).value === 'vbit' ? '' : 'none';
+      }
     };
-    $('sel-rough').addEventListener('change', syncIdxVis);
-    syncIdxVis();
+    for (const id of ['sel-rough', 'sel-rtool', 'sel-ftool', 'sel-dtool']) {
+      $(id).addEventListener('change', syncVis);
+    }
+    syncVis();
+    this._refreshToolPreviews();
 
     // Picking a profile (preset or imported) is an explicit intent: it
     // overrides any custom JSON still sitting in params from an earlier Apply.
@@ -129,8 +201,28 @@ export class UI {
 
   readParams() {
     for (const [id, [g, k, t]] of Object.entries(this.paramMap)) {
+      const grp = g.includes('.')
+        ? g.split('.').reduce((o, key) => o[key], this.params)
+        : this.params[g];
       const raw = $(id).value;
-      this.params[g][k] = t === 'str' ? raw : t === 'int' ? Math.max(1, Math.round(Number(raw) || 0)) : Number(raw);
+      grp[k] = t === 'str' ? raw
+        : t === 'bool' ? raw === 'on'
+          : t === 'int' ? Math.max(1, Math.round(Number(raw) || 0))
+            : Number(raw);
+    }
+  }
+
+  /** Redraw the three phase tool cross-sections from current params. */
+  _refreshToolPreviews() {
+    const p = this.params;
+    const map = [
+      ['pv-rough', p.tools.rough, p.allowance.rough],
+      ['pv-finish', p.tools.finish, p.allowance.finish],
+      ['pv-detail', p.tools.detail, p.allowance.detail],
+    ];
+    for (const [id, tool, allow] of map) {
+      const el = $(id);
+      if (el) el.innerHTML = toolPreviewSvg(tool, allow);
     }
   }
 
@@ -165,7 +257,7 @@ export class UI {
 
   /** Master toolpath switch off → dim + disable the per-group path checkboxes. */
   setPathsEnabled(on) {
-    for (const id of ['chk-p-rough', 'chk-p-finish', 'chk-p-rapid']) {
+    for (const id of ['chk-p-rough', 'chk-p-finish', 'chk-p-detail', 'chk-p-rapid']) {
       const el = $(id);
       el.disabled = !on;
       el.closest('label').classList.toggle('dim', !on);

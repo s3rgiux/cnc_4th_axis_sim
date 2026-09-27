@@ -62,11 +62,18 @@ node verify.mjs        # boots the UI, plays, seeks, switches strategies, screen
    { "profile": [[0,25],[80,18],[140,22],[200,10]],
      "pattern": "spiral", "patternCount": 6, "patternTurns": 2, "patternDepth": 0.22 }
    ```
-3. **Tool** – flat endmill vs ball-nose, diameter, stepover, depth of cut,
-   finishing allowance.
+3. **Phases & tools** – three passes, each with its own (progressively smaller)
+   cutter and its own **allowance** — the stock left standing above the design
+   surface after that phase: **roughing** Ø10 flat endmill → leave 3 mm,
+   **finishing** Ø4 ball-nose → leave 0.5 mm, **detailing** Ø1 ball-nose →
+   leave 0.1 mm (set 0 to cut to exact design). Every phase picks *flat
+   endmill / ball-nose / **V-bit*** (engraving cone — choose the included
+   angle); each section shows a live cross-section preview with dimensions.
 4. **Strategy** – roughing *off / indexed faceting sweeps / spiral helix* plus
-   finishing *continuous helical* or *raster (parallel 2D passes)*. Roughing
-   uses a stair-step axial clamp so it never breaks below `target + allowance`.
+   finishing *continuous helical* or *raster (parallel 2D passes)*; detailing
+   replays the finishing shape with the small tool. Each phase stair-steps at
+   `target + its own allowance`, so no phase ever digs into the next one's
+   skin, and the spindle visibly swaps cutters as each phase plays.
 5. **⚙ Generate Toolpath** then press **▶** (Space). Scrub with the timeline,
    step one block with ◀▮ / ▮▶, click anywhere in the 2D map to jump there.
    **⬇ Export G-code** downloads `part.nc`.
@@ -101,8 +108,9 @@ undercuts can't be reached by a radial tool and are clipped to the tool path.
 
 Views: **3D Rotary View**, **Unrolled 2D Flat View** (the live material state of
 the very same heightmap), or **Split**. Toggles for target ghost (an iso-contour
-blueprint of the unrolled part, in both 2D and 3D) / rough / finish paths and a
-rapids overlay (off by default — there are a lot of them). The master **toolpath**
+blueprint of the unrolled part, in both 2D and 3D) / rough / finish / detail
+paths and a rapids overlay (off by default — there are a lot of them). The
+master **toolpath**
 checkbox (or the **P** key) hides *every* path trace at once in both views — the
 fast way to see the finished part unobstructed; the per-group boxes then act as
 sub-layers under it. Double-click the 3D view to re-frame.
@@ -113,7 +121,7 @@ sub-layers under it. Double-click the 3D view to re-frame.
 index.html, styles.css      shell, import map for vendored three.js
 serve.mjs                   dev static server (path-traversal guarded)
 vendor/three/               three.module.js + core + OrbitControls (r186.1)
-src/config.js               DEFAULTS for every UI parameter
+src/config.js               DEFAULTS for every UI parameter (3 phases × tool/allowance)
 src/core/                   DOM-free pure logic (fully unit-tested)
   unroll.js                 U=θr ↔ X/Z/A transforms, moveDistance, wrap helpers
   mesh.js                   STL/OBJ parsers + cylindrical max-envelope projection
@@ -125,8 +133,8 @@ src/core/                   DOM-free pure logic (fully unit-tested)
                             continuous A, header/footer, seg→line map
   collision.js              static advisory checks: rapid gouge/envelope,
                             overtravel, AABB-vs-swept-cylinder (M1 detector)
-src/stock/stock.js          cylindrical heightmap r(x,φ); analytic flat/ball
-                            cut-down roots; monotone removal; ΔV accounting
+src/stock/stock.js          cylindrical heightmap r(x,φ); analytic flat/ball/
+                            V-bit cut-down roots; monotone removal; ΔV accounting
 src/app/sim.js              distance-based playback, sub-stepped cutting,
                             backward-seek by re-simulation
 src/app/ui.js               control panel, transport, DRO, live G-code terminal

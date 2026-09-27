@@ -139,7 +139,7 @@ test('overtravel flags X/Z beyond limits but never continuous A', () => {
 // ---------------------------------------------------------------------------
 // Integration: every strategy combo the generator produces must be clean
 // ---------------------------------------------------------------------------
-test('generated programs are collision-free for all rough×finish combos', () => {
+test('generated programs are collision-free for all rough×finish×detail combos', () => {
   const stock = { length: 200, R0: 25 };
   const design = makeDesign(
     { ...DEFAULTS.design, profile: 'classic-leg', pattern: 'spiral', patternCount: 8 },
@@ -147,25 +147,28 @@ test('generated programs are collision-free for all rough×finish combos', () =>
   );
   for (const rough of ['', 'indexed', 'spiral']) {
     for (const finish of ['helical', 'raster']) {
-      const program = generateProgram({
-        design,
-        stock,
-        tool: DEFAULTS.tool,
-        strategy: { ...DEFAULTS.strategy, rough, finish },
-        feeds: DEFAULTS.feeds,
-        clearance: DEFAULTS.clearance,
-      });
-      const res = analyzeProgram(program, {
-        design,
-        stock,
-        clearance: DEFAULTS.clearance,
-        limits: DEFAULTS.machine,
-      });
-      assert.ok(
-        res.ok,
-        `${rough || 'no-rough'} × ${finish}: ${res.findings.length} findings, first: ` +
-        `${res.findings[0]?.msg} (seg ${res.findings[0]?.segIdx})`,
-      );
+      for (const detail of [false, true]) {
+        const program = generateProgram({
+          design,
+          stock,
+          tools: DEFAULTS.tools,
+          allowance: DEFAULTS.allowance,
+          strategy: { ...DEFAULTS.strategy, rough, finish, detail },
+          feeds: DEFAULTS.feeds,
+          clearance: DEFAULTS.clearance,
+        });
+        const res = analyzeProgram(program, {
+          design,
+          stock,
+          clearance: DEFAULTS.clearance,
+          limits: DEFAULTS.machine,
+        });
+        assert.ok(
+          res.ok,
+          `${rough || 'no-rough'} × ${finish} × detail:${detail}: ${res.findings.length} findings, first: ` +
+          `${res.findings[0]?.msg} (seg ${res.findings[0]?.segIdx})`,
+        );
+      }
     }
   }
 });

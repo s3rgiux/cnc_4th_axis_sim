@@ -25,9 +25,9 @@ export class View2D {
     this.imgCtx = this.img.getContext('2d');
 
     // program map-space caches
-    this.pathLines = { rapid: [], rough: [], finish: [] }; // flat [u0,v0,u1,v1,...]
+    this.pathLines = { rapid: [], rough: [], finish: [], detail: [] }; // flat [u0,v0,u1,v1,...]
     // Path-layer visibility mirrors the overlay checkboxes (rapids off by default).
-    this.pathVisible = { rapid: false, rough: true, finish: true };
+    this.pathVisible = { rapid: false, rough: true, finish: true, detail: true };
     // Design-contour ghost (2D counterpart of view3D's target ghost).
     this.ghostVisible = true;
     this.ghostContours = [];
@@ -64,14 +64,14 @@ export class View2D {
     this.ghostContours = this._buildContours(this.targetGrid, nx, nth);
 
     // Path polylines + seek samples (dist, u, v triples).
-    this.pathLines = { rapid: [], rough: [], finish: [] };
+    this.pathLines = { rapid: [], rough: [], finish: [], detail: [] };
     const seek = [];
     let prevU = 0, prevV = 0;
     program.segments.forEach((s, i) => {
       const u = uFromA(s.A, this.R0);
       const v = s.X;
       const key = s.mode === 'G0' ? 'rapid' : s.group;
-      const gk = key === 'rough' ? 'rough' : key === 'finish' ? 'finish' : 'rapid';
+      const gk = key === 'rough' || key === 'finish' || key === 'detail' ? key : 'rapid';
       this.pathLines[gk].push(prevU, prevV, u, v);
       if (cumDist) seek.push(cumDist[i], u, v);
       prevU = u; prevV = v;
@@ -224,6 +224,7 @@ export class View2D {
     if (this.pathVisible.rapid) strokeGroup(this.pathLines.rapid, 'rgba(224,138,60,0.45)', 1, [3, 3]);
     if (this.pathVisible.rough) strokeGroup(this.pathLines.rough, 'rgba(45,212,191,0.8)', 1);
     if (this.pathVisible.finish) strokeGroup(this.pathLines.finish, 'rgba(74,222,128,0.9)', 1.2);
+    if (this.pathVisible.detail) strokeGroup(this.pathLines.detail, 'rgba(192,132,252,0.85)', 1);
 
     // ---- live cursor ---------------------------------------------------------
     if (pose) {

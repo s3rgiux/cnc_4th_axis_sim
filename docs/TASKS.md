@@ -33,6 +33,15 @@ node serve.mjs 8090 & node verify.mjs   # headless browser smoke test
 - [x] Master **toolpath** switch (checkbox + `P` key) hides all path traces in
       both views at once so the finished part reads clean; per-group checkboxes
       are sub-layers under it (dimmed while off) — `main.applyPathVisibility()`
+- [x] **3-phase machining**: rough → finish → detail, each phase with its own
+      progressively smaller cutter (Ø10 flat / Ø4 ball / Ø1 ball defaults) and
+      its own allowance (leave 3 / 0.5 / 0.1 mm above the design surface).
+      Live SVG cross-section previews per phase; the spindle swaps cutters as
+      each phase plays; new violet `detail` path layer + checkbox
+- [x] **V-bit tool type** (engraving cone, configurable included angle):
+      analytic ray↔truncated-cone cut-down in `stock.cutAt`, cone in
+      `machine.setTool`, `V-BIT n°DEG` in the G-code tool header (T1/T2/T3
+      per-phase header lines)
 - [x] 2D target iso-contour "blueprint" layer — `scene/view2d.js`
 - [x] Node test suite (30) + headless browser `verify.mjs`
 

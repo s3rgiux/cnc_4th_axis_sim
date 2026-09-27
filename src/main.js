@@ -35,7 +35,10 @@ let lastFramedL = -1;
 
 // Path-overlay visibility: one master "toolpath" switch ∧ the per-group
 // checkboxes. The finished part otherwise sits under thousands of path lines.
-const PATH_CHECKS = [['rapid', 'chk-p-rapid'], ['rough', 'chk-p-rough'], ['finish', 'chk-p-finish']];
+const PATH_CHECKS = [
+  ['rapid', 'chk-p-rapid'], ['rough', 'chk-p-rough'],
+  ['finish', 'chk-p-finish'], ['detail', 'chk-p-detail'],
+];
 function applyPathVisibility() {
   const master = $('chk-paths').checked;
   for (const [name, id] of PATH_CHECKS) {
@@ -151,7 +154,8 @@ function rebuild(okMsg) {
   program = generateProgram({
     design,
     stock: { length: L, R0 },
-    tool: params.tool,
+    tools: params.tools,
+    allowance: params.allowance,
     strategy: params.strategy,
     feeds: params.feeds,
     clearance: params.clearance,
@@ -162,11 +166,20 @@ function rebuild(okMsg) {
     return;
   }
 
-  const toolLabel = `${params.tool.type === 'ball' ? 'Ball-nose' : 'Flat endmill'} D${params.tool.diameter}`;
-  const strategyLabel = `${params.strategy.rough ? `${params.strategy.rough.toUpperCase()} rough` : 'no rough'} + ${params.strategy.finish.toUpperCase()} finish`;
+  const toolName = (t) => (t.type === 'ball' ? 'Ball-nose' : t.type === 'vbit' ? `V-bit ${t.angle}°` : 'Flat endmill');
+  const phaseLabel = (k) => `${toolName(params.tools[k])} Ø${params.tools[k].diameter}→${params.allowance[k]}mm`;
+  const strategyLabel = [
+    params.strategy.rough ? `ROUGH ${phaseLabel('rough')}` : 'no rough',
+    `FINISH ${phaseLabel('finish')}`,
+    params.strategy.detail ? `DETAIL ${phaseLabel('detail')}` : null,
+  ].filter(Boolean).join(' + ');
   gcodeData = emitGcode(program, {
     stock: { length: L, diameter: D },
-    tool: { type: params.tool.type, diameter: params.tool.diameter },
+    tools: [
+      { t: 1, phase: 'ROUGH', ...params.tools.rough, allow: params.allowance.rough },
+      { t: 2, phase: 'FINISH', ...params.tools.finish, allow: params.allowance.finish },
+      { t: 3, phase: 'DETAIL', ...params.tools.detail, allow: params.allowance.detail },
+    ],
     designName: params.design.profile === 'imported' && importedProj
       ? `imported:${importedProj.name || 'model'}`
       : (params.design.custom && params.design.custom.trim() ? 'custom' : params.design.profile),
@@ -176,14 +189,15 @@ function rebuild(okMsg) {
 
   // Stock geometry + simulator
   stock.resize(L, R0, DEFAULTS.grid.nx, DEFAULTS.grid.nth);
-  sim.setTool(params.tool);
+  sim.setTools(params.tools);
   sim.feeds = params.feeds;
   sim.load(program, { design, clearance: params.clearance, limits: params.machine });
 
   // 3D scene
   view3d.setStock(stock);
   view3d.machine.setStockLength(L);
-  view3d.machine.setTool(params.tool.type, params.tool.diameter);
+  lastToolPhase = null;                    // force the cutter rebuild below
+  applyPhaseTool(sim.pose);
   view3d.setGhost(design, L, R0, $('chk-ghost').checked);
   view3d.setPaths(program);
   applyPathVisibility(); // re-assert master ∧ per-group state on the fresh geometry
@@ -192,7 +206,6 @@ function rebuild(okMsg) {
 
   // 2D map
   view2d.setProgram(stock, design, program, sim.cumDist);
-  view2d.setToolRadius(params.tool.diameter / 2);
 
   playing = false;
   ui.setPlaying(false);
@@ -209,17 +222,35 @@ function rebuild(okMsg) {
   ui.collisionWarn(sim.analysis, first ? segToLine[first.segIdx] + 1 : 0);
 
   const roughTxt = params.strategy.rough ? `rough:${params.strategy.rough}` : 'rough:off';
-  ui.status(okMsg || `${program.stats.nG1} cutting blocks · ${program.stats.nG0} rapids · ${roughTxt}`);
+  const detailTxt = params.strategy.detail ? ' + detail' : '';
+  ui.status(okMsg || `${program.stats.nG1} cutting blocks · ${program.stats.nG0} rapids · ${roughTxt} + ${params.strategy.finish}${detailTxt}`);
 }
 
 // --------------------------------------------------------------------------
 // Per-pose visual sync
 // --------------------------------------------------------------------------
+// The spindle follows the program: while a group plays, its cutter is loaded.
+let lastToolPhase = null;
+function activePhase(pose) {
+  const g = pose && pose.group;
+  if (g === 'rough' || g === 'finish' || g === 'detail') return g;
+  return params.strategy.rough ? 'rough' : params.strategy.detail ? 'detail' : 'finish';
+}
+function applyPhaseTool(pose) {
+  const phase = activePhase(pose);
+  if (phase === lastToolPhase) return;
+  lastToolPhase = phase;
+  const t = params.tools[phase];
+  view3d.machine.setTool(t.type, t.diameter, t.angle);
+  view2d.setToolRadius(t.diameter / 2);
+}
+
 function onPose(pose, segIdx) {
   view3d.updateStock(); // no-op unless cuts happened since last rebuild
   view3d.setRotor(pose.A);
   view3d.setProgress(segIdx - 1); // segments strictly before current are done
   view3d.machine.updatePose(pose.X, pose.Z);
+  applyPhaseTool(pose);
   ui.dro(pose);
   ui.highlightLine(segIdx < 0 || !segToLine ? -1 : segToLine[segIdx]);
   ui.setTime(sim.elapsedSeconds(), sim.totalSeconds);
@@ -298,7 +329,7 @@ stock = new CylindricalStock(
   DEFAULTS.grid.nx,
   DEFAULTS.grid.nth,
 );
-sim = new Simulator(stock, params.tool, params.feeds);
+sim = new Simulator(stock, params.tools, params.feeds);
 sim.onUpdate = onPose;
 view2d.onSeek = (d) => {
   playing = false;

@@ -105,15 +105,19 @@ test('custom JSON design: profile honoured, errors raised', () => {
 // ---------------------------------------------------------------------------
 // Toolpath strategies
 // ---------------------------------------------------------------------------
-function gen(strategyOverrides = {}, toolOverrides = {}) {
+function gen(strategyOverrides = {}, toolsOverride = null) {
   const stock = { length: 200, R0: 25 };
   const design = makeDesign(DEFAULTS.design, stock);
-  const tool = { ...DEFAULTS.tool, ...toolOverrides };
+  const tools = structuredClone(DEFAULTS.tools);
+  if (toolsOverride) for (const [k, v] of Object.entries(toolsOverride)) Object.assign(tools[k], v);
   const strategy = { ...DEFAULTS.strategy, ...strategyOverrides };
   return {
     design,
     stock,
-    program: generateProgram({ design, stock, tool, strategy, feeds: DEFAULTS.feeds, clearance: DEFAULTS.clearance }),
+    program: generateProgram({
+      design, stock, tools, allowance: DEFAULTS.allowance,
+      strategy, feeds: DEFAULTS.feeds, clearance: DEFAULTS.clearance,
+    }),
   };
 }
 
@@ -161,10 +165,45 @@ test('finishing never cuts below the target surface', () => {
   }
 });
 
+test('each phase floors at target + its own allowance, in order', () => {
+  const { program, design, stock } = gen({ rough: 'spiral', finish: 'helical' });
+  const A = DEFAULTS.allowance;
+  assert.ok(A.rough > A.finish && A.finish > A.detail, 'defaults must leave progressively less');
+  const floors = { rough: A.rough, finish: A.finish, detail: A.detail };
+  for (const s of program.segments) {
+    if (s.mode !== 'G1' || !(s.group in floors)) continue;
+    const floor = design.targetRadius(uFromA(s.A, stock.R0), s.X) + floors[s.group];
+    assert.ok(s.Z >= floor - 1e-6, `${s.group}: Z=${s.Z} broke its floor ${floor}`);
+  }
+});
+
+test('detailing is a third phase with its own tool, feed and pitch', () => {
+  const { program } = gen({ rough: '', finish: 'helical' });
+  const det = program.segments.filter((s) => s.group === 'detail' && s.mode === 'G1');
+  assert.ok(det.length > 100, 'detail group present and substantial');
+  assert.ok(det.every((s) => s.F === DEFAULTS.feeds.detail), 'detail feed applied');
+  const dA = det[det.length - 1].A - det[0].A;
+  const expected = 360 * (200 / DEFAULTS.strategy.detailPitch);
+  assert.ok(Math.abs(dA - expected) <= DEFAULTS.strategy.angularStep + 1e-6,
+    `detail helix pitch: ΔA=${dA} expected≈${expected}`);
+  // Finishing runs strictly before detailing in program order.
+  let finEnd = -1, detStart = Infinity;
+  program.segments.forEach((s, i) => {
+    if (s.group === 'finish') finEnd = i;
+    if (s.group === 'detail' && detStart === Infinity) detStart = i;
+  });
+  assert.ok(finEnd < detStart, 'phase order: finish then detail');
+});
+
+test('detail off emits no detail group', () => {
+  const { program } = gen({ rough: '', finish: 'helical', detail: false });
+  assert.equal(program.segments.filter((s) => s.group === 'detail').length, 0);
+});
+
 test('roughing keeps the stair-step clamp above target + allowance', () => {
   for (const rough of ['indexed', 'spiral']) {
-    const { program, design, stock } = gen({ rough, finish: '' });
-    const allow = DEFAULTS.tool.allowance;
+    const { program, design, stock } = gen({ rough, finish: '', detail: false });
+    const allow = DEFAULTS.allowance.rough;
     for (const s of program.segments) {
       if (s.group !== 'rough' || s.mode !== 'G1') continue;
       const floor = design.targetRadius(uFromA(s.A, stock.R0), s.X) + allow;
@@ -174,8 +213,8 @@ test('roughing keeps the stair-step clamp above target + allowance', () => {
 });
 
 test('raster finish covers the full unrolled circumference', () => {
-  const { program, stock } = gen({ rough: '', finish: 'raster' });
-  const stepover = DEFAULTS.tool.stepover;
+  const { program, stock } = gen({ rough: '', finish: 'raster', detail: false });
+  const stepover = DEFAULTS.tools.finish.stepover;
   const circ = circumference(stock.R0);
   const cuts = program.segments.filter((s) => s.group === 'finish' && s.mode === 'G1');
   const Uset = [...new Set(cuts.map((s) => Math.round(uFromA(s.A, stock.R0) * 10) / 10))];
@@ -221,6 +260,31 @@ test('fmt1 formats without -0.0 artefacts', () => {
   assert.equal(fmt1(-8.16), '-8.2');
 });
 
+test('G-code header lists one tool per phase with allowances', () => {
+  const { program } = gen({ rough: 'spiral', finish: 'helical' });
+  const { lines } = emitGcode(program, {
+    stock: { length: 200, diameter: 50 },
+    tools: [
+      { t: 1, phase: 'ROUGH', ...DEFAULTS.tools.rough, allow: DEFAULTS.allowance.rough },
+      { t: 2, phase: 'FINISH', ...DEFAULTS.tools.finish, allow: DEFAULTS.allowance.finish },
+      { t: 3, phase: 'DETAIL', ...DEFAULTS.tools.detail, allow: DEFAULTS.allowance.detail },
+    ],
+  });
+  const head = lines.slice(0, 12).map((l) => l.text).join('\n');
+  assert.match(head, /T1 FLAT ENDMILL D=10\.0 ROUGH ALLOW=3\.0/);
+  assert.match(head, /T2 BALL-NOSE D=4\.0 FINISH ALLOW=0\.5/);
+  assert.match(head, /T3 BALL-NOSE D=1\.0 DETAIL ALLOW=0\.1/);
+});
+
+test('G-code header names a V-bit phase', () => {
+  const { program } = gen({ rough: '', finish: 'helical' }, { detail: { type: 'vbit', angle: 60 } });
+  const { lines } = emitGcode(program, {
+    stock: { length: 200, diameter: 50 },
+    tools: [{ t: 3, phase: 'DETAIL', ...DEFAULTS.tools.detail, type: 'vbit', angle: 60, allow: 0.1 }],
+  });
+  assert.ok(lines.some((l) => /T3 V-BIT 60\.0DEG D=1\.0 DETAIL/.test(l.text)));
+});
+
 // ---------------------------------------------------------------------------
 // Cylindrical stock model
 // ---------------------------------------------------------------------------
@@ -253,6 +317,37 @@ test('ball-nose leaves a spherical scallop', () => {
   assert.ok(r2 > s.radiusAt(iMid, 0) + 0.4, `groove is rounded (${r2} vs ${s.radiusAt(iMid, 0)})`);
   // Near the footprint edge (~11°) the sphere no longer reaches: untouched.
   assert.equal(s.radiusAt(iMid, 4), 25);
+});
+
+test('v-bit cuts straight flanks at the included angle', () => {
+  // nx=101 over L=200 → xs[50] = 100 exactly, so dx per column is known.
+  const s = new CylindricalStock(200, 25, 101, 120);
+  const tool = { R: 0.1, shape: 'vbit', angle: 90 }; // tan 45° = 1
+  s.cutAt(100, 20, 0, tool);
+  const iMid = 50;
+  assert.ok(Math.abs(s.radiusAt(iMid, 0) - 20) < 0.05, 'tip flat cuts to Zc dead centre');
+  // 90° included → flank rises 1 mm per mm lateral from the tip edge.
+  assert.ok(Math.abs(s.radiusAt(iMid + 1, 0) - (20 + (2 - 0.1))) < 0.05, 'flank at dx=2');
+  assert.ok(Math.abs(s.radiusAt(iMid + 2, 0) - (20 + (4 - 0.1))) < 0.05, 'flank at dx=4');
+  assert.equal(s.radiusAt(iMid + 3, 0), 25, 'beyond the flank reach: untouched');
+  // A ray steeper than the 45° flank (θw=60°) is never cut.
+  const j60 = 20; // 60° of 360 at nth=120
+  assert.equal(s.radiusAt(iMid, j60), 25, 'steep ray untouched');
+  // Idempotent like every other cutter.
+  const snap = Float32Array.from(s.radii);
+  s.cutAt(100, 20, 0, tool);
+  for (let i = 0; i < snap.length; i++) assert.equal(s.radii[i], snap[i]);
+});
+
+test('narrow v-bit cuts a deeper narrower groove', () => {
+  const s = new CylindricalStock(200, 25, 101, 120);
+  const tool = { R: 0.05, shape: 'vbit', angle: 30 }; // tan 15° ≈ 0.268
+  s.cutAt(100, 15, 0, tool);
+  const t = Math.tan(15 * Math.PI / 180);
+  const dx = 2;
+  // Flank height above the tip grows as (d − Rt)/tan α: narrow → deep.
+  assert.ok(Math.abs(s.radiusAt(51, 0) - (15 + (dx - 0.05) / t)) < 0.05, '30° flank slope');
+  assert.equal(s.radiusAt(55, 0), 25, 'narrow cone does not reach dx=10 at this depth');
 });
 
 test('cuts are monotone and idempotent', () => {

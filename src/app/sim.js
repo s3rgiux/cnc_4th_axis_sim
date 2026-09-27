@@ -20,21 +20,33 @@ const CLEAN_ANALYSIS = { findings: [], counts: { gouge: 0, envelope: 0, overtrav
 export class Simulator {
   /**
    * @param {object} stock  CylindricalStock
-   * @param {object} tool   { type, diameter } — used for cut footprint
-   * @param {object} feeds  { rough, finish, rapid }
+   * @param {object} tools  { rough, finish, detail } each { type, diameter,
+   *   angle } — the cutter actually used while a segment of that group plays.
+   * @param {object} feeds  { rough, finish, detail, rapid }
    * @param {number} substep max mm per cutAt() application
    */
-  constructor(stock, tool, feeds, substep = 0.45) {
+  constructor(stock, tools, feeds, substep = 0.45) {
     this.stock = stock;
-    this.tool = { R: Math.max(tool.diameter / 2, 0.01), ball: tool.type === 'ball' };
+    this.setTools(tools);
     this.feeds = feeds;
     this.substep = substep;
     this.onUpdate = null; // (pose, segIdx) => void — survives reloads
     this.load(null);
   }
 
-  setTool(tool) {
-    this.tool = { R: Math.max(tool.diameter / 2, 0.01), ball: tool.type === 'ball' };
+  /** Map each machining group to its cutter geometry. */
+  setTools(tools) {
+    const geom = (t) => ({
+      R: Math.max((t?.diameter ?? 4) / 2, 0.01),
+      shape: t?.type || 'ball',
+      angle: t?.angle || 90,
+    });
+    this.toolsByGroup = {
+      rough: geom(tools?.rough),
+      finish: geom(tools?.finish),
+      detail: geom(tools?.detail),
+    };
+    this.tool = this.toolsByGroup.finish; // fallback for untagged cutting
   }
 
   /**
@@ -101,6 +113,7 @@ export class Simulator {
       F: s.mode === 'G1' ? s.F : this.feeds.rapid,
       mode: s.mode,
       cutting: s.mode === 'G1',
+      group: s.group,
       _seg: i,
     };
   }
@@ -152,7 +165,10 @@ export class Simulator {
     for (let d = from; d < to; ) {
       const dEnd = Math.min(d + step, to);
       const p = this.poseAt(dEnd);
-      if (p.cutting) this.stock.cutAt(p.X, p.Z, p.A, this.tool);
+      if (p.cutting) {
+        const tool = this.toolsByGroup[p.group] || this.tool;
+        this.stock.cutAt(p.X, p.Z, p.A, tool);
+      }
       d = dEnd;
     }
   }

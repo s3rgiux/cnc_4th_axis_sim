@@ -66,6 +66,12 @@ body {
   color: var(--accent); margin: 10px 0 6px;
   border-bottom: 1px solid var(--line); padding-bottom: 4px;
 }
+#panel h2 small { color: var(--dim); font-weight: 400; letter-spacing: .4px; text-transform: none; }
+.toolpv {
+  background: #0d1219; border: 1px solid var(--line); border-radius: 5px;
+  margin: 4px 0 7px; overflow: hidden;
+}
+.toolpv svg { width: 100%; height: auto; display: block; }
 #panel label {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   margin: 5px 0; color: var(--dim); font-size: 12px;
@@ -82,7 +88,7 @@ body {
 #panel input:focus, #panel select:focus, #panel textarea:focus {
   outline: none; border-color: var(--accent);
 }
-.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .grid3 label { display: block; }
 .grid3 input { width: 100%; }
 

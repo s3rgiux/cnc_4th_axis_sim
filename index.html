@@ -61,32 +61,63 @@
     </section>
 
     <section>
-      <h2>Tool</h2>
-      <label>Cutter<select id="sel-tool">
-        <option value="flat">Flat Endmill</option>
-        <option value="ball" selected>Ball-Nose Endmill</option>
-      </select></label>
-      <label>Diameter (mm)<input type="number" id="num-tool-d" min="0.5" max="25" step="0.5" value="6"></label>
-      <label>Stepover (mm)<input type="number" id="num-stepover" min="0.25" max="15" step="0.25" value="2"></label>
-      <label>Depth of cut (mm)<input type="number" id="num-doc" min="0.25" max="12" step="0.25" value="3"></label>
-      <label>Finish allowance (mm)<input type="number" id="num-allow" min="0" max="3" step="0.05" value="0.2"></label>
-    </section>
-
-    <section>
-      <h2>Machining Strategy</h2>
-      <label>Roughing<select id="sel-rough">
+      <h2>Roughing <small>Ø10 → leave 3 mm</small></h2>
+      <div class="toolpv"><svg id="pv-rough" viewBox="0 0 248 74" preserveAspectRatio="xMidYMid meet"></svg></div>
+      <label>Strategy<select id="sel-rough">
         <option value="">— off —</option>
         <option value="spiral" selected>Spiral (helical roughing)</option>
         <option value="indexed">Indexed (faceting sweeps)</option>
       </select></label>
       <label>Spiral pitch (mm/rev)<input type="number" id="num-roughpitch" min="0.5" max="20" step="0.5" value="4"></label>
       <label id="lbl-indexes">Index count N<input type="number" id="num-indexes" min="3" max="72" step="1" value="12"></label>
-      <label>Finishing<select id="sel-finish">
+      <label>Cutter<select id="sel-rtool">
+        <option value="flat" selected>Flat endmill</option>
+        <option value="ball">Ball-nose</option>
+        <option value="vbit">V-bit</option>
+      </select></label>
+      <label>Diameter (mm)<input type="number" id="num-rdia" min="0.5" max="25" step="0.5" value="10"></label>
+      <label id="lbl-rang" style="display:none">V angle (deg)<input type="number" id="num-rang" min="15" max="160" step="5" value="90"></label>
+      <label>Depth of cut (mm)<input type="number" id="num-rdoc" min="0.25" max="12" step="0.25" value="3"></label>
+      <label title="Stock left standing above the design surface after roughing">Leave stock (mm)<input type="number" id="num-rallow" min="0" max="8" step="0.1" value="3"></label>
+    </section>
+
+    <section>
+      <h2>Finishing <small>Ø4 → leave 0.5 mm</small></h2>
+      <div class="toolpv"><svg id="pv-finish" viewBox="0 0 248 74" preserveAspectRatio="xMidYMid meet"></svg></div>
+      <label>Strategy<select id="sel-finish">
         <option value="helical" selected>Continuous helical</option>
         <option value="raster">Raster (parallel 2D passes)</option>
       </select></label>
       <label>Helix pitch (mm/rev)<input type="number" id="num-pitch" min="0.25" max="20" step="0.25" value="3"></label>
+      <label>Stepover (mm)<input type="number" id="num-fstep" min="0.25" max="15" step="0.25" value="2"></label>
       <label>A sample step (deg)<input type="number" id="num-astep" min="0.5" max="10" step="0.25" value="2"></label>
+      <label>Cutter<select id="sel-ftool">
+        <option value="flat">Flat endmill</option>
+        <option value="ball" selected>Ball-nose</option>
+        <option value="vbit">V-bit</option>
+      </select></label>
+      <label>Diameter (mm)<input type="number" id="num-fdia" min="0.5" max="25" step="0.5" value="4"></label>
+      <label id="lbl-fang" style="display:none">V angle (deg)<input type="number" id="num-fang" min="15" max="160" step="5" value="90"></label>
+      <label title="Stock left for the detailing pass">Leave stock (mm)<input type="number" id="num-fallow" min="0" max="3" step="0.05" value="0.5"></label>
+    </section>
+
+    <section>
+      <h2>Detailing <small>Ø1 → final skin</small></h2>
+      <div class="toolpv"><svg id="pv-detail" viewBox="0 0 248 74" preserveAspectRatio="xMidYMid meet"></svg></div>
+      <label>Detail pass<select id="sel-detail">
+        <option value="off">— off —</option>
+        <option value="on" selected>On (smaller tool)</option>
+      </select></label>
+      <label>Helix pitch (mm/rev)<input type="number" id="num-dpitch" min="0.25" max="10" step="0.25" value="1"></label>
+      <label>Stepover (mm)<input type="number" id="num-dstep" min="0.1" max="5" step="0.1" value="0.5"></label>
+      <label>Cutter<select id="sel-dtool">
+        <option value="flat">Flat endmill</option>
+        <option value="ball" selected>Ball-nose</option>
+        <option value="vbit">V-bit</option>
+      </select></label>
+      <label>Diameter (mm)<input type="number" id="num-ddia" min="0.1" max="10" step="0.1" value="1"></label>
+      <label id="lbl-dang" style="display:none">V angle (deg)<input type="number" id="num-dang" min="15" max="160" step="5" value="60"></label>
+      <label title="Final skin above the design surface; 0 cuts to exact design">Leave stock (mm)<input type="number" id="num-dallow" min="0" max="1" step="0.05" value="0.1"></label>
     </section>
 
     <section>
@@ -94,6 +125,7 @@
       <div class="grid3">
         <label>Rough<input type="number" id="num-frough" min="10" max="10000" step="10" value="1200"></label>
         <label>Finish<input type="number" id="num-ffinish" min="10" max="10000" step="10" value="800"></label>
+        <label>Detail<input type="number" id="num-fdetail" min="10" max="10000" step="10" value="500"></label>
         <label>Rapid<input type="number" id="num-frapid" min="100" max="20000" step="100" value="4000"></label>
       </div>
     </section>
@@ -113,6 +145,7 @@
         <label class="master" title="Master switch for every toolpath trace (P)"><input type="checkbox" id="chk-paths" checked> toolpath</label>
         <label class="sub"><input type="checkbox" id="chk-p-rough" checked> rough</label>
         <label class="sub"><input type="checkbox" id="chk-p-finish" checked> finish</label>
+        <label class="sub"><input type="checkbox" id="chk-p-detail" checked> detail</label>
         <label class="sub"><input type="checkbox" id="chk-p-rapid"> rapids</label>
         <label><input type="checkbox" id="chk-ghost" checked> target ghost</label>
         <span id="dblhint">dbl-click: re-frame · P: paths</span>

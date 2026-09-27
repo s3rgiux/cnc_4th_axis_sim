@@ -1,6 +1,17 @@
 /**
  * config.js — default machine parameters (millimetres, mm/min feeds).
  * The UI reads these to seed its inputs; core modules receive plain objects.
+ *
+ * Machining runs in three phases, each with its own (progressively smaller)
+ * cutter and its own allowance — the stock left standing above the design
+ * surface after that phase finishes:
+ *
+ *   rough  →  finish  →  detail
+ *   Ø10 flat   Ø4 ball    Ø1 ball/v-bit      (defaults)
+ *   leave 3mm  leave 0.5  leave 0.1          (defaults)
+ *
+ * Tool `type`: 'flat' | 'ball' | 'vbit' (`angle` = V included angle, deg;
+ * `diameter` = tip flat for a V-bit).
  */
 export const DEFAULTS = {
   stock: {
@@ -15,12 +26,15 @@ export const DEFAULTS = {
     patternDepth: 0.22,       // groove depth as fraction of stock radius
     custom: '',               // optional JSON overriding profile/pattern
   },
-  tool: {
-    type: 'ball',             // 'flat' | 'ball'
-    diameter: 6,
-    stepover: 2,              // lateral step between finishing passes (mm)
-    doc: 3,                   // roughing depth of cut per level (radial mm)
-    allowance: 0.2,           // finishing allowance left by roughing (mm)
+  tools: {
+    rough:  { type: 'flat', diameter: 10, angle: 90, doc: 3 },      // end mill
+    finish: { type: 'ball', diameter: 4,  angle: 90, stepover: 2 }, // ball nose
+    detail: { type: 'ball', diameter: 1,  angle: 60, stepover: 0.5 },
+  },
+  allowance: {
+    rough: 3,       // stock left above the design surface after roughing
+    finish: 0.5,    // … after finishing (removed by detailing)
+    detail: 0.1,    // … after detailing (final skin; 0 = cut to exact design)
   },
   strategy: {
     rough: 'spiral',          // '' (off) | 'indexed' | 'spiral'
@@ -29,10 +43,13 @@ export const DEFAULTS = {
     finish: 'helical',        // 'helical' | 'raster'
     pitch: 3,                 // helical finishing: axial advance per revolution (mm/rev)
     angularStep: 2,           // helix sampling resolution (deg of A per G-code block)
+    detail: true,             // third phase: same pass shape, smaller tool
+    detailPitch: 1,           // detailing helix pitch (mm/rev)
   },
   feeds: {
     rough: 1200,              // mm/min
     finish: 800,
+    detail: 500,
     rapid: 4000,
   },
   clearance: 4,               // Z travel above stock radius for rapids (mm)

@@ -78,13 +78,14 @@ export class View3D {
       rapid: this._mkLinePair(0xb4652f, 0xe08a3c, 0.5),
       rough: this._mkLinePair(0x1f6f68, 0x2dd4bf, 0.5),
       finish: this._mkLinePair(0x218a4e, 0x4ade80, 0.5),
+      detail: this._mkLinePair(0x6d4fc4, 0xc084fc, 0.5),
     };
     // Rapid moves are dense (every G0 approach/retract); start hidden and
     // let the "rapid moves" checkbox reveal them.
     this.pathMeshes.rapid.all.visible = false;
     this.pathMeshes.rapid.done.visible = false;
     this._groupOfSeg = null;
-    this._lastDone = [-1, -1, -1];
+    this._lastDone = [-1, -1, -1, -1];
 
     // collision overlay (static analysis findings, drawn over everything)
     this.collisionGroup = new THREE.Group();
@@ -225,15 +226,15 @@ export class View3D {
   // Toolpath traces (drawn in rotor space: the path inscribed on the part)
   // -------------------------------------------------------------------------
   setPaths(program) {
-    const groups = { rapid: [], rough: [], finish: [] };
+    const groups = { rapid: [], rough: [], finish: [], detail: [] };
     const segGroup = new Uint8Array(program.segments.length);
-    const GROUP_ID = { rapid: 0, rough: 1, finish: 2 };
+    const GROUP_ID = { rapid: 0, rough: 1, finish: 2, detail: 3 };
     const p0 = [0, 0, 0], p1 = [0, 0, 0];
     let prev = { X: 0, Z: 0, A: 0 };
     for (let i = 0; i < program.segments.length; i++) {
       const s = program.segments[i];
       const g = s.mode === 'G0' ? 'rapid' : s.group;
-      const gk = g === 'rough' ? 'rough' : g === 'finish' ? 'finish' : 'rapid';
+      const gk = g === 'rough' || g === 'finish' || g === 'detail' ? g : 'rapid';
       groups[gk].push(...makeRotorPoint(p0, prev.X, prev.Z, prev.A));
       groups[gk].push(...makeRotorPoint(p1, s.X, s.Z, s.A));
       segGroup[i] = GROUP_ID[gk];
@@ -251,18 +252,18 @@ export class View3D {
       pair.done.geometry.setDrawRange(0, 0);
     }
     this._groupOfSeg = segGroup;
-    this._lastDone = [-1, -1, -1];
+    this._lastDone = [-1, -1, -1, -1];
   }
 
   /** Brighten everything the TCP has already travelled over (segment granularity). */
   setProgress(segIdx) {
     if (!this._groupOfSeg) return;
-    const counts = [0, 0, 0];
+    const counts = [0, 0, 0, 0];
     const upto = Math.min(segIdx, this._groupOfSeg.length - 1);
     // Counts per group are monotone; recompute is an O(segs) int loop — cheap.
     for (let i = 0; i <= upto; i++) counts[this._groupOfSeg[i]]++;
-    const keys = ['rapid', 'rough', 'finish'];
-    for (let g = 0; g < 3; g++) {
+    const keys = ['rapid', 'rough', 'finish', 'detail'];
+    for (let g = 0; g < keys.length; g++) {
       const pair = this.pathMeshes[keys[g]];
       const verts = counts[g] * 2;
       if (this._lastDone[g] !== verts) {

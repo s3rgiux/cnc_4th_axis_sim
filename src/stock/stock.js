@@ -26,6 +26,14 @@
  *   left alone; cells beyond ±75° from top-dead-centre are skipped (the tool
  *   physically cannot reach there).
  *
+ * V-BIT (truncated cone, tip flat radius Rt, half-angle α = angle/2, apex h0 =
+ *   Rt/tan α below the tip plane): a point at radius ρ is inside the tool when
+ *   √(dx² + ρ²s²) ≤ (ρ·c − Zc + h0)·tan α with ρ·c ≥ Zc − h0. The cut-down
+ *   radius is the largest root of the resulting quadratic (the smaller root is
+ *   the phantom nappe below the apex and is rejected); cells whose ray meets
+ *   the tip flat within Rt are cut straight to Zc. Rays steeper than the flank
+ *   (θw ≥ α) find no valid root and are skipped — the flank never reaches them.
+ *
  * DOM-free: safe to import from Node tests.
  */
 import { wrap, wrapPi, RAD_PER_DEG } from '../core/unroll.js';
@@ -81,19 +89,35 @@ export class CylindricalStock {
    * @param {number} xc   tool X (mm)
    * @param {number} zc   tool tip distance from rotation axis (mm)
    * @param {number} aDeg rotary angle A (degrees, continuous)
-   * @param {{R:number, ball:boolean}} tool
+   * @param {{R:number, shape?:'flat'|'ball'|'vbit', angle?:number, ball?:boolean}} tool
+   *   shape wins; `ball` boolean is accepted as a legacy alias. `angle` is the
+   *   V-bit included angle (deg), R its tip-flat radius.
    * @returns {boolean} true if any material was removed
    */
   cutAt(xc, zc, aDeg, tool) {
     const Rt = Math.max(tool.R, 0.01);
-    const Rt2 = Rt * Rt;
+    const shape = tool.shape || (tool.ball ? 'ball' : 'flat');
     const zcEff = Math.max(zc, 0);
     const A = aDeg * RAD_PER_DEG;
-    const { nth, nx, dx, dTheta, xs, radii } = this;
+    const { nth, nx, dx, dTheta, xs, radii, R0 } = this;
 
-    // Axial window of influence: |x − xc| ≤ Rt.
-    let i0 = Math.floor((xc - Rt - xs[0]) / dx);
-    let i1 = Math.ceil((xc + Rt - xs[0]) / dx);
+    // Lateral window of influence: Rt for the cylindrical tools; a V-bit cone
+    // widens with depth, so its reach grows with the deepest possible bite
+    // (a cell at radius ≤ R0 can be cut out to Rt + (R0 − Zc)·tan α).
+    let reach = Rt;
+    let tanA = 0, h0 = 0;
+    if (shape === 'vbit') {
+      const alpha = Math.min(Math.max(tool.angle || 90, 15), 170) * 0.5 * RAD_PER_DEG;
+      tanA = Math.tan(alpha);
+      h0 = Rt / tanA; // apex sits h0 below the tip plane
+      reach = Rt + Math.max(0, R0 - zcEff) * tanA;
+    }
+    const reach2 = reach * reach;
+    const foot2 = Rt * Rt; // footprint limit for the cylindrical tools
+
+    // Axial window of influence: |x − xc| ≤ reach.
+    let i0 = Math.floor((xc - reach - xs[0]) / dx);
+    let i1 = Math.ceil((xc + reach - xs[0]) / dx);
     i0 = Math.max(0, i0);
     i1 = Math.min(nx - 1, i1);
     if (i0 > i1) return false;
@@ -105,8 +129,8 @@ export class CylindricalStock {
     for (let i = i0; i <= i1; i++) {
       const dxx = xs[i] - xc;
       const dxx2 = dxx * dxx;
-      if (dxx2 > Rt2) continue;
-      const ringFoot2 = Rt2 - dxx2; // max (ρ·sin θw)² inside footprint
+      if (dxx2 > reach2) continue;
+      const ringFoot2 = foot2 - dxx2; // max (ρ·sin θw)² inside footprint
       const rowBase = i * nth;
 
       for (let j = 0; j < nth; j++) {
@@ -119,7 +143,7 @@ export class CylindricalStock {
 
         const r0 = radii[rowBase + j];
         let rNew;
-        if (!tool.ball) {
+        if (shape === 'flat') {
           // FLAT: cut down to tip-height plane inside the footprint.
           const rhoCut = zcEff / c;
           if (rhoCut >= r0) continue;
@@ -129,10 +153,10 @@ export class CylindricalStock {
             if (rhoCut > rhoMax) continue; // overhang case: conservative skip
           }
           rNew = rhoCut;
-        } else {
+        } else if (shape === 'ball') {
           // BALL: sphere intersection along the ray.
           const h = zcEff + Rt;
-          const disc = Rt2 - dxx2 - h * h * s2;
+          const disc = foot2 - dxx2 - h * h * s2;
           if (disc <= 0) continue;
           rNew = h * c - Math.sqrt(disc);
           if (rNew >= r0 || rNew < 0) continue;
@@ -140,6 +164,33 @@ export class CylindricalStock {
             const rhoMax = Math.sqrt(ringFoot2 / s2);
             if (rNew > rhoMax) continue; // overhang case: conservative skip
           }
+        } else {
+          // V-BIT: tip flat first, then the cone flank.
+          const t2 = tanA * tanA;
+          const tanW = s / c;
+          if (tanW * tanW >= t2 * (1 - 1e-9)) continue; // ray steeper than flank
+          const dt2 = dxx2 + zcEff * zcEff * tanW * tanW; // lateral at tip plane
+          if (dt2 <= foot2) {
+            rNew = zcEff; // under the tip flat
+          } else {
+            // Largest root of ρ²(s²−t²c²) − 2t²ck·ρ + (dx²−t²k²) = 0,
+            // k = h0 − Zc (quadratic of d(ρ) = (ρc − Zc + h0)·tan α).
+            const k = h0 - zcEff;
+            const qa = s2 - t2 * c * c;
+            const qb = -2 * t2 * c * k;
+            const qc = dxx2 - t2 * k * k;
+            if (Math.abs(qa) < 1e-12) {
+              if (Math.abs(qb) < 1e-12) continue;
+              rNew = -qc / qb;
+            } else {
+              const disc = qb * qb - 4 * qa * qc;
+              if (disc < 0) continue;
+              const sq = Math.sqrt(disc);
+              rNew = Math.max((-qb + sq) / (2 * qa), (-qb - sq) / (2 * qa));
+            }
+            if (!(rNew >= zcEff) || rNew * c + k < 0) continue; // phantom root
+          }
+          if (rNew >= r0) continue;
         }
 
         radii[rowBase + j] = rNew;

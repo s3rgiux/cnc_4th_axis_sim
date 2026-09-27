@@ -47,7 +47,9 @@ makeHeightmapDesign(proj,...)    core/mesh.js       ── if an STL/OBJ was imp
         │        └── both produce the SAME interface:
         │            { targetRadius(u,v), profileRadius(v), minTarget(), meta }
         ▼
-generateProgram({design,stock,tool,strategy,feeds,clearance})   core/toolpath.js
+generateProgram({design,stock,tools,allowance,strategy,feeds,clearance})
+        │   core/toolpath.js — three phases (rough → finish → detail), each
+        │   with its own cutter + allowance floor; groups tagged per phase
         │   → { segments:[{mode,X,Z,A,F,group}], … }   (machine-agnostic)
         ▼
 emitGcode(program, meta)          core/gcode.js     → text + seg→line map (terminal)
@@ -55,6 +57,8 @@ emitGcode(program, meta)          core/gcode.js     → text + seg→line map (t
         ▼
 CylindricalStock.resize(L,R0,nx,nth)   stock/stock.js   → Float32Array r[i·nth+j]
 Simulator.load(program, ctx)           app/sim.js       → distance table, playback
+        │   └── setTools({rough,finish,detail}): the cutter actually applied
+        │       while a segment of that group plays (flat / ball / vbit)
         │   └── also runs analyzeProgram() once          (core/collision.js)
         │       → sim.analysis {findings, counts, ok, summary}  (advisory only)
         │       → view3d.setCollisions (red overlay) + ui.collisionWarn (amber line)
@@ -117,10 +121,13 @@ src/config.js             DEFAULTS for every parameter
 ### CylindricalStock (stock/stock.js)
 - Grid `nx × nth`; `radii` is `Float32Array(nx·nth)`, `radii[i·nth+j]` = radius
   at axial column `i` and circumferential sector `j`.
-- Cutting solves the exact flat/ball profile intersection analytically (no
-  raycasting) and only ever cuts **down** → removal is monotone and
-  idempotent. This is what makes backward scrub legal: reset + re-apply
-  cutting up to the target distance reproduces any intermediate state.
+- Cutting solves the exact **flat / ball / V-bit** profile intersection
+  analytically (no raycasting) and only ever cuts **down** → removal is
+  monotone and idempotent. This is what makes backward scrub legal: reset +
+  re-apply cutting up to the target distance reproduces any intermediate
+  state. The V-bit is a truncated cone: the cut-down radius along a cell ray
+  is the largest root of a quadratic (the smaller root is the phantom nappe
+  below the apex); rays steeper than the flank are skipped.
 - ΔV (volume removed) is accumulated per cut for the "removed cm³" readout.
 
 ### Playback (app/sim.js)
@@ -128,6 +135,9 @@ src/config.js             DEFAULTS for every parameter
   *distance*, not a block index, so speed/scrub are smooth and sub-stepped.
 - Rapid vs feed (`G0`/`G1`) selects the rate; the terminal highlights the
   current block through the seg→line map.
+- `setTools({rough, finish, detail})` maps each program group to its cutter;
+  `_applyRun` cuts with the tool of the playing segment's group, and
+  `main.applyPhaseTool` swaps the visible spindle cutter on the same signal.
 
 ### Mesh import (core/mesh.js) — the Phase-8 details that matter
 - `parseSTL`: binary iff `byteLength === 84 + n·50` (`n = getUint32(80,true)`),
