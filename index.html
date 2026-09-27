@@ -110,11 +110,12 @@
       <div id="v3d"></div>
       <div id="v2d"></div>
       <div id="overlay-toggles">
+        <label class="master" title="Master switch for every toolpath trace (P)"><input type="checkbox" id="chk-paths" checked> toolpath</label>
+        <label class="sub"><input type="checkbox" id="chk-p-rough" checked> rough</label>
+        <label class="sub"><input type="checkbox" id="chk-p-finish" checked> finish</label>
+        <label class="sub"><input type="checkbox" id="chk-p-rapid"> rapids</label>
         <label><input type="checkbox" id="chk-ghost" checked> target ghost</label>
-        <label><input type="checkbox" id="chk-p-rough" checked> rough path</label>
-        <label><input type="checkbox" id="chk-p-finish" checked> finish path</label>
-        <label><input type="checkbox" id="chk-p-rapid"> rapid moves</label>
-        <span id="dblhint">dbl-click: re-frame</span>
+        <span id="dblhint">dbl-click: re-frame · P: paths</span>
       </div>
     </div>
 
@@ -153,6 +154,7 @@
     </section>
 
     <div id="status"></div>
+    <div id="collide-warn" hidden></div>
   </aside>
 </div>
 

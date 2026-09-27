@@ -156,10 +156,20 @@ export class UI {
         this.h.onView(cls.replace('show-', ''));
       });
     }
+    $('chk-paths').addEventListener('change', (e) => this.h.onToggle('paths', e.target.checked));
     $('chk-ghost').addEventListener('change', (e) => this.h.onToggle('ghost', e.target.checked));
     $('chk-p-rough').addEventListener('change', (e) => this.h.onToggle('rough', e.target.checked));
     $('chk-p-finish').addEventListener('change', (e) => this.h.onToggle('finish', e.target.checked));
     $('chk-p-rapid').addEventListener('change', (e) => this.h.onToggle('rapid', e.target.checked));
+  }
+
+  /** Master toolpath switch off → dim + disable the per-group path checkboxes. */
+  setPathsEnabled(on) {
+    for (const id of ['chk-p-rough', 'chk-p-finish', 'chk-p-rapid']) {
+      const el = $(id);
+      el.disabled = !on;
+      el.closest('label').classList.toggle('dim', !on);
+    }
   }
 
   // ---- playback state ------------------------------------------------------
@@ -233,5 +243,24 @@ export class UI {
     const el = $('status');
     el.textContent = msg;
     el.classList.toggle('err', isError);
+  }
+
+  /**
+   * Persistent advisory line for static collision findings (M4). Separate
+   * from #status so a later status message never hides a safety warning.
+   * @param {object} analysis result of analyzeProgram()
+   * @param {number} firstLine 1-based G-code terminal line of the first finding
+   */
+  collisionWarn(analysis, firstLine = 0) {
+    const el = $('collide-warn');
+    if (!el) return;
+    if (!analysis || analysis.ok) {
+      el.hidden = true;
+      el.textContent = '';
+      return;
+    }
+    el.hidden = false;
+    const where = firstLine > 0 ? ` — first at line ${firstLine}, flagged red in 3D` : '';
+    el.textContent = `⚠ Collision check: ${analysis.summary}${where}`;
   }
 }

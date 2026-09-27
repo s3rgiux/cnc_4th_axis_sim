@@ -54,8 +54,10 @@ emitGcode(program, meta)          core/gcode.js     → text + seg→line map (t
         │
         ▼
 CylindricalStock.resize(L,R0,nx,nth)   stock/stock.js   → Float32Array r[i·nth+j]
-Simulator.load(program)            app/sim.js       → distance table, playback
-        │
+Simulator.load(program, ctx)           app/sim.js       → distance table, playback
+        │   └── also runs analyzeProgram() once          (core/collision.js)
+        │       → sim.analysis {findings, counts, ok, summary}  (advisory only)
+        │       → view3d.setCollisions (red overlay) + ui.collisionWarn (amber line)
         ▼  (per animation frame, given a pose {X,Z,A,F})
 View3D.draw   ── rebuild stock mesh from radii, spin rotor, move cutter
 View2D.draw   ── paint radii as heatmap, iso-contour ghost, path lines, cursor
@@ -90,6 +92,11 @@ src/core/                 DOM-free, fully unit-tested
   mesh.js                 parseSTL, parseOBJ, projectToCylinder, makeHeightmapDesign
   toolpath.js             generateProgram (+ indexed/spiral/helical/raster)
   gcode.js                emitGcode, buildSegToLine, fmt1
+  collision.js            static advisory checks: rapidsGougeCheck (G0 below the
+                          finished surface = gouge; axial G0 below R0+clearance =
+                          envelope risk), overtravelCheck (X/Z; A unbounded),
+                          aabbVsSweptCylinder (M1 detector, shared with verify.mjs),
+                          analyzeProgram → {findings, counts, ok, summary}
 src/stock/
   stock.js                CylindricalStock: heightmap, analytic cutting, ΔV
 src/app/
@@ -145,6 +152,10 @@ src/config.js             DEFAULTS for every parameter
   finite-difference normals → holds 60 fps at 110×120 on a GPU.
 - **Path overlays** are three line groups (rapid/rough/finish), each a done +
   all pair using `setDrawRange` for the "machined so far" effect.
+- **Path visibility** is `master toolpath switch ∧ per-group checkbox`,
+  recomputed by `main.applyPathVisibility()` and pushed to both views at once
+  (3D mesh `.visible` + 2D `pathVisible` flag); the master also disables the
+  sub-checkboxes so one click always clears the part.
 - **2D map**: `radii` written into a tiny `ImageData` and smooth-scaled; a
   marching-squares iso-contour of the target gives the "blueprint before
   cutting" look; a jump-check culls wrap-segment artifacts.
@@ -154,10 +165,15 @@ src/config.js             DEFAULTS for every parameter
 - `node --test "tests/**/*.test.mjs"` — pure logic only (no DOM/GL).
   `tests/core.test.mjs` (math/strategies/gcode/stock), `tests/mesh.test.mjs`
   (parse + projection + demo-leg integration incl. seam continuity and feature
-  survival).
+  survival), `tests/collision.test.mjs` (gouge/envelope/overtravel detection,
+  swept-cylinder AABB, and a false-positive guard proving every rough×finish
+  combo the generator emits is collision-clean).
 - `verify.mjs` — headless Chrome (playwright-core + swiftshader) drives the
   real UI end to end and writes `shots/*.png`; asserts carve volume removal,
-  continuous-A presence, import flow, error reporting.
+  continuous-A presence, import flow, error reporting, carriage/stock clearance
+  (M1, via the shared `collision.aabbVsSweptCylinder` detector + a negative
+  control), and the M4 static analysis (live program clean, synthetic
+  violations flagged, red overlay rendered).
 - Rule of thumb from the build: **geometric/projection bugs get a Node test
   first.** Every projection bug found this cycle (seam smear, barycentric
   weights, centroid drift, chirality) was killed in a unit test, not a browser.

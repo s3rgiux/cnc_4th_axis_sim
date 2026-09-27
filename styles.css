@@ -118,6 +118,9 @@ button.primary:hover { background: linear-gradient(180deg, #2a8ad6, #1b74bb); }
   border-radius: 6px; padding: 5px 9px; backdrop-filter: blur(4px);
 }
 #overlay-toggles label { display: flex; gap: 4px; align-items: center; cursor: pointer; }
+#overlay-toggles label.master { color: var(--txt); font-weight: 600; }
+#overlay-toggles label.sub { padding-left: 6px; border-left: 1px solid var(--line); }
+#overlay-toggles label.dim { opacity: .38; pointer-events: none; }
 #dblhint { color: #4b5a6e; margin-left: 4px; }
 
 #transport {
@@ -184,6 +187,12 @@ button.primary:hover { background: linear-gradient(180deg, #2a8ad6, #1b74bb); }
   border-top: 1px solid var(--line); min-height: 30px;
 }
 #status.err { color: #f87171; }
+
+#collide-warn {
+  padding: 7px 12px; font-size: 11px; line-height: 1.45;
+  color: #fbbf24; background: rgba(180, 83, 9, 0.12);
+  border-top: 1px solid rgba(251, 191, 36, 0.35);
+}
 
 /* scrollbars */
 ::-webkit-scrollbar { width: 9px; height: 9px; }

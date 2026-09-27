@@ -154,17 +154,30 @@ if (!(legRemoved > 50)) errors.push(`demo leg full carve only ${legRemoved} cm³
 step(`demo leg fully machined → removed=${legRemoved.toFixed(1)} cm³`);
 await page.screenshot({ path: OUT + '09-imported-carve.png' });
 
-// clean shot of the machined leg without path/ghost overlays
+// clean shot of the machined leg: ONE click on the master "toolpath" switch
+// hides every path trace in both views (ghost turned off separately).
 await page.evaluate(() => {
-  for (const id of ['chk-ghost', 'chk-p-rough', 'chk-p-finish']) {
+  for (const id of ['chk-ghost', 'chk-paths']) {
     const c = document.getElementById(id);
     c.checked = false; c.dispatchEvent(new Event('change', { bubbles: true }));
   }
 });
 await page.waitForTimeout(600);
+const pathOff = await page.evaluate(() => {
+  const { view3d, view2d } = window.__dbg;
+  return {
+    v3: ['rapid', 'rough', 'finish'].every((k) => !view3d.pathMeshes[k].all.visible && !view3d.pathMeshes[k].done.visible),
+    v2: Object.values(view2d.pathVisible).every((v) => !v),
+    subsDisabled: document.getElementById('chk-p-rough').disabled,
+  };
+});
+if (!pathOff.v3) errors.push('master toolpath switch left 3D path meshes visible');
+if (!pathOff.v2) errors.push('master toolpath switch left 2D path layers visible');
+if (!pathOff.subsDisabled) errors.push('per-group path checkboxes not disabled while master off');
+step('master toolpath switch hides all path traces in 3D + 2D');
 await page.screenshot({ path: OUT + '09b-imported-leg-clean.png' });
 await page.evaluate(() => {
-  for (const id of ['chk-ghost', 'chk-p-rough', 'chk-p-finish']) {
+  for (const id of ['chk-ghost', 'chk-paths']) {
     const c = document.getElementById(id);
     c.checked = true; c.dispatchEvent(new Event('change', { bubbles: true }));
   }
@@ -192,12 +205,17 @@ await page.keyboard.press('Space');
 await page.waitForTimeout(600);
 const playingNow = await page.evaluate(() => document.getElementById('btn-play').textContent);
 step(`Space → play button shows "${playingNow}"`);
+await page.keyboard.press('KeyP');
+const pOff = await page.evaluate(() => document.getElementById('chk-paths').checked);
+if (pOff) errors.push('P shortcut did not toggle the toolpath master switch');
+await page.keyboard.press('KeyP');
+step('P shortcut toggles the toolpath master switch');
 
 // --- M1: carriage frame must never enter the swept stock circle -------------------------
 // World frame: rotary axis = world X at y=0,z=0; swept stock = cylinder radius R0 over
-// x∈[0,L]. For each structural carriage member, over the full carriage travel, its box's
-// min distance from the X axis (hypot of the y/z signed gaps) must stay ≥ R0. A negative
-// control (a frame member dropped onto the axis) proves the detector fires.
+// x∈[0,L]. For each structural carriage member, over the full carriage travel, its AABB
+// is tested with the SAME pure detector the app uses (core/collision.js via __dbg.collide).
+// A negative control (a frame member dropped onto the axis) proves the detector fires.
 async function setStock(len, dia) {
   await page.evaluate(([len, dia]) => {
     for (const [id, v] of [['num-len', len], ['num-dia', dia]]) {
@@ -209,7 +227,7 @@ async function setStock(len, dia) {
 }
 async function scanFrame(label) {
   const r = await page.evaluate(() => {
-    const { view3d, stock } = window.__dbg;
+    const { view3d, stock, collide } = window.__dbg;
     const m = view3d.machine;
     const L = stock.length, R0 = stock.R0;
     const aabb = (mesh) => {
@@ -230,9 +248,7 @@ async function scanFrame(label) {
     for (const f of [0, 0.25, 0.5, 0.75, 1]) {
       m.carriage.position.x = f * L; view3d.scene.updateMatrixWorld(true);
       for (const mesh of m.frameMeshes) {
-        const [x0, x1, y0, y1, z0, z1] = aabb(mesh);
-        const dy = y0 > 0 ? y0 : (y1 < 0 ? -y1 : 0), dz = z0 > 0 ? z0 : (z1 < 0 ? -z1 : 0);
-        if (x1 > -0.05 && x0 < L + 0.05 && Math.hypot(dy, dz) < R0 - 0.05) hits.push(mesh.geometry.type);
+        if (collide.aabbVsSweptCylinder(aabb(mesh), L, R0)) hits.push(mesh.geometry.type);
       }
     }
     // negative control: clone a member onto the axis; the detector MUST flag it.
@@ -240,9 +256,7 @@ async function scanFrame(label) {
     const bad = m.frameMeshes[m.frameMeshes.length - 1].clone();
     bad.position.set(0, 0, 0); m.carriage.add(bad); m.frameMeshes.push(bad);
     view3d.scene.updateMatrixWorld(true);
-    const [bx0, bx1, by0, by1, bz0, bz1] = aabb(bad);
-    const dy = by0 > 0 ? by0 : (by1 < 0 ? -by1 : 0), dz = bz0 > 0 ? bz0 : (bz1 < 0 ? -bz1 : 0);
-    const ctl = (bx1 > -0.05 && bx0 < L + 0.05) && Math.hypot(dy, dz) < R0 - 0.05;
+    const ctl = collide.aabbVsSweptCylinder(aabb(bad), L, R0);
     m.frameMeshes.pop(); m.carriage.remove(bad);
     return { L, R0, hits, ctlOk: ctl };
   });
@@ -254,6 +268,43 @@ for (const [len, dia] of [[200, 50], [360, 120], [10, 6]]) {
   await setStock(len, dia);
   await scanFrame(`L${len}xD${dia}`);
 }
+
+// --- M4: static collision analysis + red overlay ------------------------------------------
+// 1) the generated program must be flagged clean; 2) the pure detector must fire on a
+// synthetic gouging/enveloping program (negative control); 3) the warning line stays
+// hidden while clean; 4) the red overlay actually renders.
+await setStock(200, 50);
+const m4 = await page.evaluate(() => {
+  const { sim, collide, view3d, program } = window.__dbg;
+  const clean = sim.analysis.findings.length;
+  const synth = collide.analyzeProgram({
+    segments: [
+      { mode: 'G0', X: 0, Z: 29, A: 0 },
+      { mode: 'G0', X: 100, Z: 20, A: 0 }, // axial rapid below Zc → envelope
+      { mode: 'G0', X: 50, Z: 8, A: 0 },   // dips below finished r=10 → gouge
+    ],
+  }, {
+    design: { targetRadius: () => 10 },
+    stock: { length: 100, R0: 25 },
+    clearance: 4,
+    limits: { xMin: -5, xMax: 450, zMin: 0.05, zMax: 120 },
+  });
+  const kinds = synth.findings.map((f) => f.kind);
+  // render proof: paint a synthetic finding on the live scene
+  const s6 = program.segments[6];
+  view3d.setCollisions(program.segments, [{ segIdx: 6, kind: 'gouge', X: s6.X, Z: s6.Z, A: s6.A }]);
+  return { clean, kinds, warnHidden: document.getElementById('collide-warn').hidden };
+});
+step(`M4 analysis: live findings=${m4.clean}, synthetic detector=[${m4.kinds.join(',')}]`);
+if (m4.clean !== 0) errors.push(`generated program flagged ${m4.clean} collisions`);
+if (!m4.kinds.includes('gouge') || !m4.kinds.includes('envelope')) {
+  errors.push('collision detector missed synthetic envelope/gouge rapids — check is broken');
+}
+if (!m4.warnHidden) errors.push('collision warning visible on a clean program');
+await page.waitForTimeout(400);
+await page.screenshot({ path: OUT + '10-collision-overlay.png' });
+await page.evaluate(() => window.__dbg.view3d.setCollisions(window.__dbg.program.segments, []));
+step('collision overlay rendered red then cleared (shots/10-collision-overlay.png)');
 
 await browser.close();
 

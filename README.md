@@ -38,7 +38,7 @@ DOM. **No build step, no framework, no backend.**
 
 ```bash
 npm run serve          # zero-dependency Node static server → http://127.0.0.1:8090
-npm test               # 23 unit tests for core math / strategies / stock model
+npm test               # 44 unit tests for core math / strategies / stock / collisions
 ```
 
 ES modules do not run from `file://`, hence the tiny static server — the app
@@ -70,6 +70,10 @@ node verify.mjs        # boots the UI, plays, seeks, switches strategies, screen
 5. **⚙ Generate Toolpath** then press **▶** (Space). Scrub with the timeline,
    step one block with ◀▮ / ▮▶, click anywhere in the 2D map to jump there.
    **⬇ Export G-code** downloads `part.nc`.
+6. **Collision advisory** — every generated program is statically checked:
+   rapids that break below the finished surface or travel axially inside the
+   raw-stock envelope, and X/Z overtravel are listed on an amber warning line
+   and painted red in the 3D view. Advisory only — playback is never blocked.
 
 ### Importing a real 3D model (STL / OBJ)
 
@@ -98,8 +102,10 @@ undercuts can't be reached by a radial tool and are clipped to the tool path.
 Views: **3D Rotary View**, **Unrolled 2D Flat View** (the live material state of
 the very same heightmap), or **Split**. Toggles for target ghost (an iso-contour
 blueprint of the unrolled part, in both 2D and 3D) / rough / finish paths and a
-rapids overlay (off by default — there are a lot of them); double-click the 3D
-view to re-frame.
+rapids overlay (off by default — there are a lot of them). The master **toolpath**
+checkbox (or the **P** key) hides *every* path trace at once in both views — the
+fast way to see the finished part unobstructed; the per-group boxes then act as
+sub-layers under it. Double-click the 3D view to re-frame.
 
 ## Architecture
 
@@ -117,6 +123,8 @@ src/core/                   DOM-free pure logic (fully unit-tested)
   toolpath.js               strategy generators → {mode,X,Z,A,F,group} segments
   gcode.js                  post-processor: merged axis words per block,
                             continuous A, header/footer, seg→line map
+  collision.js              static advisory checks: rapid gouge/envelope,
+                            overtravel, AABB-vs-swept-cylinder (M1 detector)
 src/stock/stock.js          cylindrical heightmap r(x,φ); analytic flat/ball
                             cut-down roots; monotone removal; ΔV accounting
 src/app/sim.js              distance-based playback, sub-stepped cutting,
@@ -131,6 +139,7 @@ src/scene/view2d.js         unrolled map canvas: removal heatmap, target
                             click-to-seek
 tests/core.test.mjs         node:test suite (math, strategies, G-code, stock)
 tests/mesh.test.mjs         STL/OBJ parse, cylinder projection, demo-leg import
+tests/collision.test.mjs    rapid gouge/envelope, overtravel, swept-cylinder AABB
 scripts/make-demo-leg.mjs   generates assets/table-leg.stl (baroque demo model)
 verify.mjs                  optional headless browser smoke test
 ```

@@ -11,6 +11,7 @@ import { makeDesign } from './core/profiles.js';
 import { parseSTL, parseOBJ, projectToCylinder, makeHeightmapDesign } from './core/mesh.js';
 import { generateProgram } from './core/toolpath.js';
 import { emitGcode, buildSegToLine } from './core/gcode.js';
+import * as collide from './core/collision.js';
 import { CylindricalStock } from './stock/stock.js';
 import { Simulator } from './app/sim.js';
 import { View3D } from './scene/view3d.js';
@@ -31,6 +32,18 @@ let speedMult = 2;
 let currentView = 'show-3d';
 let lastFrame = performance.now();
 let lastFramedL = -1;
+
+// Path-overlay visibility: one master "toolpath" switch ∧ the per-group
+// checkboxes. The finished part otherwise sits under thousands of path lines.
+const PATH_CHECKS = [['rapid', 'chk-p-rapid'], ['rough', 'chk-p-rough'], ['finish', 'chk-p-finish']];
+function applyPathVisibility() {
+  const master = $('chk-paths').checked;
+  for (const [name, id] of PATH_CHECKS) {
+    const v = master && $(id).checked;
+    view3d.setGroupVisible(name, v);
+    view2d.pathVisible[name] = v;
+  }
+}
 
 // --------------------------------------------------------------------------
 // Handlers invoked by the UI layer
@@ -67,9 +80,11 @@ const handlers = {
     if (key === 'ghost') {
       view3d.setGhostVisible(val);
       view2d.setGhostVisible(val);
+    } else if (key === 'paths') {
+      ui.setPathsEnabled(val);
+      applyPathVisibility();
     } else {
-      view3d.setGroupVisible(key, val);
-      if (view2d.pathVisible && key in view2d.pathVisible) view2d.pathVisible[key] = val;
+      applyPathVisibility(); // per-group box: effective = master ∧ group
     }
   },
 
@@ -163,7 +178,7 @@ function rebuild(okMsg) {
   stock.resize(L, R0, DEFAULTS.grid.nx, DEFAULTS.grid.nth);
   sim.setTool(params.tool);
   sim.feeds = params.feeds;
-  sim.load(program);
+  sim.load(program, { design, clearance: params.clearance, limits: params.machine });
 
   // 3D scene
   view3d.setStock(stock);
@@ -171,6 +186,7 @@ function rebuild(okMsg) {
   view3d.machine.setTool(params.tool.type, params.tool.diameter);
   view3d.setGhost(design, L, R0, $('chk-ghost').checked);
   view3d.setPaths(program);
+  applyPathVisibility(); // re-assert master ∧ per-group state on the fresh geometry
   if (lastFramedL !== L) view3d.resetView(L);
   lastFramedL = L;
 
@@ -186,6 +202,12 @@ function rebuild(okMsg) {
   ui.removed(0);
   ui.setScrub(0);
   ui.setTime(0, sim.totalSeconds);
+
+  // Static collision advisory (M4): red overlay in 3D + persistent warning.
+  view3d.setCollisions(program.segments, sim.analysis.findings);
+  const first = sim.analysis.findings[0];
+  ui.collisionWarn(sim.analysis, first ? segToLine[first.segIdx] + 1 : 0);
+
   const roughTxt = params.strategy.rough ? `rough:${params.strategy.rough}` : 'rough:off';
   ui.status(okMsg || `${program.stats.nG1} cutting blocks · ${program.stats.nG0} rapids · ${roughTxt}`);
 }
@@ -234,6 +256,10 @@ window.addEventListener('keydown', (e) => {
   } else if (e.code === 'ArrowLeft') {
     e.preventDefault();
     handlers.onStepB();
+  } else if (e.code === 'KeyP') {
+    const cb = $('chk-paths');
+    cb.checked = !cb.checked;
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
   }
 });
 
@@ -285,4 +311,4 @@ rebuild('Ready — press ▶ to machine');
 requestAnimationFrame(frame);
 
 // QA/test hook (read-only): lets external scripts inspect scene geometry.
-window.__dbg = { view3d, view2d, stock, sim, params, get program() { return program; } };
+window.__dbg = { view3d, view2d, stock, sim, params, collide, get program() { return program; } };

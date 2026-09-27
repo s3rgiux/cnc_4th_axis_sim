@@ -7,7 +7,7 @@ methodology and `docs/ARCHITECTURE.md` for how the pieces fit.
 
 **Verify before/after any change:**
 ```
-node --test "tests/**/*.test.mjs"   # pure-logic suite (currently 30/30)
+node --test "tests/**/*.test.mjs"   # pure-logic suite (currently 44/44)
 node serve.mjs 8090 & node verify.mjs   # headless browser smoke test
 ```
 
@@ -30,6 +30,9 @@ node serve.mjs 8090 & node verify.mjs   # headless browser smoke test
       changes) — `core/mesh.js`, `src/main.js`, `src/app/ui.js`
 - [x] Procedural baroque demo leg `assets/table-leg.stl` — `scripts/make-demo-leg.mjs`
 - [x] Overlay toggles now drive both views; rapids toggle (off by default)
+- [x] Master **toolpath** switch (checkbox + `P` key) hides all path traces in
+      both views at once so the finished part reads clean; per-group checkboxes
+      are sub-layers under it (dimmed while off) — `main.applyPathVisibility()`
 - [x] 2D target iso-contour "blueprint" layer — `scene/view2d.js`
 - [x] Node test suite (30) + headless browser `verify.mjs`
 
@@ -84,20 +87,29 @@ them affect the toolpath math; they affect believability and safety-checking.
 - Touch: `src/scene/machine.js`; `src/scene/view3d.js` only if the highlight
   is driven per-frame from the sim's `isCutting` state.
 
-**M4 — Collision detection + reporting (pure module + overlay).**
-- New `src/core/collision.js` (DOM-free, unit-tested):
-  - **Rapids gouge check:** every `G0` rapid that moves X while `Z` is below
-    the current stock surface + clearance can plough into the part. Flag rapid
-    segments whose (X,Z) is inside the material envelope. This is a genuine
-    programming bug the sim should surface, not just a cosmetic one.
-  - **Envelope vs machine:** test machine AABBs (column, head, chuck,
-    tailstock) against the swept stock cylinder → drives M1's acceptance test.
-  - **Over-travel:** X/Z/A outside machine travel limits.
-- Wire: `app/sim.js` runs the rapid check once at `load()` (static), view3D
-  tints colliding segments red and paints a marker; `ui.js` shows a status
-  warning line. Playback is unaffected — this is advisory.
-- Touch: new `core/collision.js` + `tests/collision.test.mjs`; small hooks in
-  `sim.js`, `view3d.js`, `ui.js`.
+**M4 — Collision detection + reporting (pure module + overlay). ✅ DONE.**
+- New `src/core/collision.js` (DOM-free, 14 unit tests in `tests/collision.test.mjs`):
+  - **Rapids gouge:** any `G0` whose tip breaks below `design.targetRadius`
+    (the finished surface) can never be legitimate — flagged per block. This
+    includes rapids that *start* below the surface and travel X.
+  - **Rapids in envelope:** axial `G0` (ΔX > 0.05) below `R0 + clearance`
+    ploughs into possibly-uncut stock. Pure radial retracts (ΔX ≈ 0) are the
+    normal way out of a groove and are exempt — the generator keeps every
+    axial rapid at Zc, so a flag here means a real risk.
+  - **Overtravel:** X/Z outside `config.js → machine` travel limits. A is
+    deliberately unbounded: continuous multi-turn rotary is the feature.
+  - **Machine envelope:** `aabbVsSweptCylinder` — M1's detector extracted
+    into the pure core; `verify.mjs` now feeds it the live carriage AABBs, so
+    the browser check and the Node tests share one source of truth.
+- Wiring: `sim.load(program, {design, clearance, limits})` runs the analysis
+  once at load → `sim.analysis`; `view3d.setCollisions` paints offending
+  segments red (rotor space, depth-test off) with marker dots; `ui.collisionWarn`
+  shows a persistent amber line naming the first offending G-code line.
+  Playback is never affected — this is advisory.
+- Acceptance: the Node suite proves all rough×finish combos generate clean
+  programs (false-positive guard) and that synthetic gouge/envelope/overtravel
+  programs fire; `verify.mjs` M4 section re-checks live + synthetic in the
+  browser and screenshots the red overlay (`shots/10-collision-overlay.png`).
 
 ### 🟠 Feature ideas
 
