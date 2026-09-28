@@ -24,7 +24,11 @@ page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
 
 await page.goto(PAGE_URL, { waitUntil: 'load' });
-await page.waitForSelector('#term .ln', { timeout: 15000 });
+await page.waitForSelector('#term .ln', { timeout: 30000 });
+// Planning runs in a worker: wait for the pending program to land before
+// reading anything program-dependent.
+const idle = () => page.waitForFunction(() => window.__dbg && !window.__dbg.busy, null, { timeout: 60000 });
+await idle();
 step('app booted, gcode terminal populated');
 
 // WebGL actually rendering?
@@ -132,6 +136,7 @@ await page.screenshot({ path: OUT + '05-scrub-60.png' });
 for (const [sel, val] of [['#sel-rough', 'indexed'], ['#sel-finish', 'raster']]) {
   await page.selectOption(sel, val);
   await page.waitForTimeout(900);
+  await idle();
 }
 await page.waitForTimeout(600);
 await page.screenshot({ path: OUT + '06-indexed-raster.png' });
@@ -142,6 +147,7 @@ step(`indexed+raster → status "${statusTxt.trim()}"`);
 await page.fill('#ta-custom', JSON.stringify({ profile: [[0, 25], [90, 14], [200, 25]], pattern: 'reeding', patternCount: 12 }));
 await page.click('#btn-custom');
 await page.waitForTimeout(900);
+await idle();
 await page.screenshot({ path: OUT + '07-custom.png' });
 await page.fill('#ta-custom', '{ broken');
 await page.click('#btn-custom');
@@ -153,6 +159,7 @@ await page.fill('#ta-custom', '');
 await page.selectOption('#sel-profile', 'classic-leg');
 await page.dispatchEvent('#sel-profile', 'change');
 await page.waitForTimeout(900);
+await idle();
 
 // --- STL import: procedural baroque demo leg ------------------------------------------
 await page.click('#btn-reset');
@@ -317,6 +324,16 @@ const m4 = await page.evaluate(() => {
   return { clean, kinds, warnHidden: document.getElementById('collide-warn').hidden };
 });
 step(`M4 analysis: live findings=${m4.clean}, synthetic detector=[${m4.kinds.join(',')}]`);
+
+// --- Simulated residue / gouge verification (core/residue.js via the plan worker) ---------
+await page.waitForFunction(() => window.__dbg.residue != null, null, { timeout: 60000 });
+const resid = await page.evaluate(() => {
+  const r = window.__dbg.residue;
+  return { gouge: r.maxGouge, rest: r.maxResidue, tol: r.tol, label: document.getElementById('lbl-residue').textContent };
+});
+if (resid.gouge > resid.tol) errors.push(`simulated program gouges ${resid.gouge.toFixed(3)} mm below the final skin`);
+if (!/mm/.test(resid.label)) errors.push('gouge / rest readout not filled');
+step(`residue check: gouge ${resid.gouge.toFixed(3)} mm, rest ${resid.rest.toFixed(2)} mm → "${resid.label}"`);
 if (m4.clean !== 0) errors.push(`generated program flagged ${m4.clean} collisions`);
 if (!m4.kinds.includes('gouge') || !m4.kinds.includes('envelope')) {
   errors.push('collision detector missed synthetic envelope/gouge rapids — check is broken');
@@ -333,6 +350,7 @@ step('collision overlay rendered red then cleared (shots/10-collision-overlay.pn
 await page.selectOption('#sel-dtool', 'vbit');
 await page.dispatchEvent('#sel-dtool', 'change');
 await page.waitForTimeout(1200);
+await idle();
 const vbit = await page.evaluate(() => {
   const p = window.__dbg.program;
   const det = p.segments.filter((s) => s.group === 'detail' && s.mode === 'G1');

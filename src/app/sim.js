@@ -14,6 +14,7 @@
  */
 import { moveDistance } from '../core/unroll.js';
 import { analyzeProgram } from '../core/collision.js';
+import { toolGeom } from '../stock/stock.js';
 
 const CLEAN_ANALYSIS = { findings: [], counts: { gouge: 0, envelope: 0, overtravel: 0 }, ok: true, summary: '' };
 
@@ -31,22 +32,30 @@ export class Simulator {
     this.feeds = feeds;
     this.substep = substep;
     this.onUpdate = null; // (pose, segIdx) => void — survives reloads
+    this.floor = null;    // optional per-cell floor radii for gouge attribution
+    this.segGouge = null; // Float32Array: deepest cut below floor per segment
     this.load(null);
   }
 
   /** Map each machining group to its cutter geometry. */
   setTools(tools) {
-    const geom = (t) => ({
-      R: Math.max((t?.diameter ?? 4) / 2, 0.01),
-      shape: t?.type || 'ball',
-      angle: t?.angle || 90,
-    });
     this.toolsByGroup = {
-      rough: geom(tools?.rough),
-      finish: geom(tools?.finish),
-      detail: geom(tools?.detail),
+      rough: toolGeom(tools?.rough),
+      finish: toolGeom(tools?.finish),
+      detail: toolGeom(tools?.detail),
     };
     this.tool = this.toolsByGroup.finish; // fallback for untagged cutting
+  }
+
+  /**
+   * Track gouges against a per-cell floor (see CylindricalStock.cutAt).
+   * Pass null to disable. `segGouge[i]` accumulates the deepest cut below
+   * the floor made while segment i played (monotone, so re-simulation on a
+   * backward seek is harmless).
+   */
+  setFloor(floor) {
+    this.floor = floor || null;
+    this.segGouge = this.floor ? new Float32Array(this.segs.length) : null;
   }
 
   /**
@@ -77,6 +86,7 @@ export class Simulator {
     this.totalSeconds = t;
     this.dist = 0;
     this.curSeg = -1;
+    this.segGouge = this.floor ? new Float32Array(n) : null;
     this.pose = { ...h, F: 0, mode: 'G0', cutting: false };
     this.analysis = (program && ctx)
       ? analyzeProgram(program, {
@@ -167,7 +177,11 @@ export class Simulator {
       const p = this.poseAt(dEnd);
       if (p.cutting) {
         const tool = this.toolsByGroup[p.group] || this.tool;
-        this.stock.cutAt(p.X, p.Z, p.A, tool);
+        this.stock.cutAt(p.X, p.Z, p.A, tool, this.floor);
+        if (this.floor) {
+          const g = this.stock.lastMaxGouge;
+          if (g > this.segGouge[p._seg]) this.segGouge[p._seg] = g;
+        }
       }
       d = dEnd;
     }

@@ -139,7 +139,7 @@ for (const rough of ['indexed', 'spiral']) {
 }
 
 test('helical finishing is continuous synchronized X/A motion', () => {
-  const { program, design, stock } = gen({ rough: '', finish: 'helical' }, {});
+  const { program, design, stock } = gen({ rough: '', finish: 'helical', scallop: false }, {});
   const fin = program.segments.filter((s) => s.group === 'finish' && s.mode === 'G1');
   assert.ok(fin.length > 100);
   let prevA = fin[0].A, prevX = fin[0].X;
@@ -178,7 +178,7 @@ test('each phase floors at target + its own allowance, in order', () => {
 });
 
 test('detailing is a third phase with its own tool, feed and pitch', () => {
-  const { program } = gen({ rough: '', finish: 'helical' });
+  const { program } = gen({ rough: '', finish: 'helical', scallop: false });
   const det = program.segments.filter((s) => s.group === 'detail' && s.mode === 'G1');
   assert.ok(det.length > 100, 'detail group present and substantial');
   assert.ok(det.every((s) => s.F === DEFAULTS.feeds.detail), 'detail feed applied');
@@ -195,6 +195,21 @@ test('detailing is a third phase with its own tool, feed and pitch', () => {
   assert.ok(finEnd < detStart, 'phase order: finish then detail');
 });
 
+test('constant-scallop helix shrinks the pitch on axial slopes', () => {
+  // The classic leg has steep coves: constant-scallop mode must turn MORE
+  // revolutions than the fixed pitch would, never fewer.
+  const fixed = gen({ rough: '', finish: 'helical', detail: false, scallop: false });
+  const scal = gen({ rough: '', finish: 'helical', detail: false, scallop: true });
+  const turns = (p) => {
+    const fin = p.program.segments.filter((s) => s.group === 'finish' && s.mode === 'G1');
+    return (fin[fin.length - 1].A - fin[0].A) / 360;
+  };
+  const tf = turns(fixed), ts = turns(scal);
+  assert.ok(Math.abs(tf - 200 / DEFAULTS.strategy.pitch) < 0.01, `fixed turns ${tf}`);
+  assert.ok(ts > tf * 1.02, `scallop turns ${ts} should exceed fixed ${tf}`);
+  assert.ok(ts < tf * 4.01, 'pitch never drops below a quarter');
+});
+
 test('detail off emits no detail group', () => {
   const { program } = gen({ rough: '', finish: 'helical', detail: false });
   assert.equal(program.segments.filter((s) => s.group === 'detail').length, 0);
@@ -208,6 +223,71 @@ test('roughing keeps the stair-step clamp above target + allowance', () => {
       if (s.group !== 'rough' || s.mode !== 'G1') continue;
       const floor = design.targetRadius(uFromA(s.A, stock.R0), s.X) + allow;
       assert.ok(s.Z >= floor - 1e-6, `${rough}: rough block Z=${s.Z} broke below clamp floor ${floor}`);
+    }
+  }
+});
+
+test('waterline finishing traces constant-Z contours; hybrid adds them only on steep walls', () => {
+  const stock = { length: 200, R0: 25 };
+  const design = makeDesign({ ...DEFAULTS.design, profile: 'step-shaft' }, stock);
+  const run = (finish) => generateProgram({
+    design, stock, tools: DEFAULTS.tools, allowance: DEFAULTS.allowance,
+    strategy: { ...DEFAULTS.strategy, rough: '', detail: false, finish },
+    feeds: DEFAULTS.feeds, clearance: DEFAULTS.clearance,
+  });
+  const wl = run('waterline');
+  const cuts = wl.segments.filter((s) => s.group === 'finish' && s.mode === 'G1');
+  assert.ok(cuts.length > 200, 'waterline emitted contour blocks');
+  // Within a contour run, consecutive cutting blocks share Z (constant-Z passes)
+  // except where the run had to lift above the level to respect the floor.
+  let sameZ = 0, moves = 0;
+  for (let i = 1; i < cuts.length; i++) {
+    if (Math.abs(cuts[i].A - cuts[i - 1].A) < 1e-9 && Math.abs(cuts[i].X - cuts[i - 1].X) < 1e-9) continue; // plunge
+    moves++;
+    if (Math.abs(cuts[i].Z - cuts[i - 1].Z) < 1e-6) sameZ++;
+  }
+  assert.ok(sameZ / moves > 0.8, `constant-Z share ${(sameZ / moves).toFixed(2)}`);
+  // Never below the finishing floor (target + allowance).
+  for (const s of cuts) {
+    const floor = design.targetRadius(uFromA(s.A, stock.R0), s.X) + DEFAULTS.allowance.finish;
+    assert.ok(s.Z >= floor - 1e-6, `waterline block below floor: ${s.Z} < ${floor}`);
+  }
+  const hel = run('helical'), hyb = run('hybrid');
+  assert.ok(hyb.segments.length > hel.segments.length + 100, 'hybrid adds steep-wall passes on the step shaft');
+  const leg = makeDesign({ ...DEFAULTS.design, profile: 'taper' }, stock);
+  const flat = generateProgram({
+    design: leg, stock, tools: DEFAULTS.tools, allowance: DEFAULTS.allowance,
+    strategy: { ...DEFAULTS.strategy, rough: '', detail: false, finish: 'hybrid' },
+    feeds: DEFAULTS.feeds, clearance: DEFAULTS.clearance,
+  });
+  const flatHel = generateProgram({
+    design: leg, stock, tools: DEFAULTS.tools, allowance: DEFAULTS.allowance,
+    strategy: { ...DEFAULTS.strategy, rough: '', detail: false, finish: 'helical' },
+    feeds: DEFAULTS.feeds, clearance: DEFAULTS.clearance,
+  });
+  assert.equal(flat.segments.length, flatHel.segments.length, 'no steep walls on a taper → hybrid adds nothing');
+});
+
+test('spiral roughing skips air turns where the previous level left nothing', () => {
+  // Spool: full-radius flanges at both ends. Their rough floor (target + 3 mm)
+  // sits above every level, so every turn over a flange is air after the
+  // first pass and must be hopped with a rapid instead of cut.
+  const stock = { length: 200, R0: 25 };
+  const design = makeDesign({ ...DEFAULTS.design, profile: 'spool' }, stock);
+  const prog = generateProgram({
+    design, stock, tools: DEFAULTS.tools, allowance: DEFAULTS.allowance,
+    strategy: { ...DEFAULTS.strategy, rough: 'spiral', detail: false },
+    feeds: DEFAULTS.feeds, clearance: DEFAULTS.clearance,
+  });
+  const roughG0 = prog.segments.filter((s) => s.group === 'rough' && s.mode === 'G0');
+  assert.ok(roughG0.length > 2 * prog.stats.levels + 4, `expected air hops, got ${roughG0.length} rough rapids`);
+  // No rough cut ever happens over the flanges below the flange floor.
+  const Zc = stock.R0 + DEFAULTS.clearance;
+  for (const s of prog.segments) {
+    if (s.group !== 'rough' || s.mode !== 'G1') continue;
+    if (s.X < 10 || s.X > 190) {
+      const floor = design.targetRadius(uFromA(s.A, stock.R0), s.X) + DEFAULTS.allowance.rough;
+      assert.ok(s.Z >= Math.min(floor, Zc) - 1e-6, `flange cut below floor at X=${s.X}`);
     }
   }
 });

@@ -12,6 +12,8 @@ import { parseSTL, parseOBJ, projectToCylinder, makeHeightmapDesign } from './co
 import { generateProgram } from './core/toolpath.js';
 import { emitGcode, buildSegToLine } from './core/gcode.js';
 import * as collide from './core/collision.js';
+import { buildFloor } from './core/residue.js';
+import { unpackProgram } from './core/pack.js';
 import { CylindricalStock } from './stock/stock.js';
 import { Simulator } from './app/sim.js';
 import { View3D } from './scene/view3d.js';
@@ -32,6 +34,12 @@ let speedMult = 2;
 let currentView = 'show-3d';
 let lastFrame = performance.now();
 let lastFramedL = -1;
+let residue = null;      // last simulated residue analysis (core/residue.js)
+let residueSeq = 0;      // discriminates stale worker replies
+let planSeq = 0;         // discriminates stale generate replies
+let planWorker = null;   // app/plan-worker.js: generation + residue off-thread
+let pendingOk = null;    // status message to show when the pending program lands
+let busy = false;        // a generate request is in flight (verify.mjs polls this)
 
 // Path-overlay visibility: one master "toolpath" switch ∧ the per-group
 // checkboxes. The finished part otherwise sits under thousands of path lines.
@@ -86,6 +94,8 @@ const handlers = {
     } else if (key === 'paths') {
       ui.setPathsEnabled(val);
       applyPathVisibility();
+    } else if (key === 'residue') {
+      view2d.setResidueVisible(val);
     } else {
       applyPathVisibility(); // per-group box: effective = master ∧ group
     }
@@ -152,20 +162,42 @@ function rebuild(okMsg) {
     return;
   }
 
-  program = generateProgram({
-    design,
+  const grid = gridFor(L, R0);
+  const input = {
     stock: { length: L, R0 },
     tools: params.tools,
     allowance: params.allowance,
     strategy: params.strategy,
     feeds: params.feeds,
     clearance: params.clearance,
-  });
+    grid,
+  };
 
-  if (!program.segments.length) {
+  const worker = getPlanWorker();
+  if (worker) {
+    // Off-thread: the UI stays live while the offset surfaces are sampled.
+    const id = ++planSeq;
+    pendingOk = okMsg;
+    busy = true;
+    ui.status('Generating toolpath…');
+    const designSpec = params.design.profile === 'imported' && importedProj
+      ? { imported: { h: importedProj.h, nx: importedProj.nx, nth: importedProj.nth, name: importedProj.name || 'model' } }
+      : { design: params.design };
+    worker.postMessage({ type: 'generate', id, designSpec, ...input });
+    return;
+  }
+  applyProgram(generateProgram({ design, ...input }), L, R0, grid, okMsg);
+}
+
+/** Second half of a rebuild: post-process, load, and show a fresh program. */
+function applyProgram(prog, L, R0, grid, okMsg) {
+  busy = false;
+  const D = R0 * 2;
+  if (!prog.segments.length) {
     ui.status('Nothing to generate — enable a strategy.', true);
     return;
   }
+  program = prog;
 
   const toolName = (t) => (t.type === 'ball' ? 'Ball-nose' : t.type === 'vbit' ? `V-bit ${t.angle}°` : 'Flat endmill');
   const phaseLabel = (k) => `${toolName(params.tools[k])} Ø${params.tools[k].diameter}→${params.allowance[k]}mm`;
@@ -189,7 +221,6 @@ function rebuild(okMsg) {
   segToLine = buildSegToLine(gcodeData.lines, program.segments.length);
 
   // Stock geometry + simulator
-  const grid = gridFor(L, R0);
   stock.resize(L, R0, grid.nx, grid.nth);
   sim.setTools(params.tools);
   sim.feeds = params.feeds;
@@ -219,13 +250,82 @@ function rebuild(okMsg) {
   ui.setTime(0, sim.totalSeconds);
 
   // Static collision advisory (M4): red overlay in 3D + persistent warning.
-  view3d.setCollisions(program.segments, sim.analysis.findings);
-  const first = sim.analysis.findings[0];
-  ui.collisionWarn(sim.analysis, first ? segToLine[first.segIdx] + 1 : 0);
+  showAdvisory(sim.analysis);
+  // Simulated residue / gouge check runs off-thread and merges in when done.
+  runResidueAnalysis(L, R0, grid);
 
   const roughTxt = params.strategy.rough ? `rough:${params.strategy.rough}` : 'rough:off';
   const detailTxt = params.strategy.detail ? ' + detail' : '';
   ui.status(okMsg || `${program.stats.nG1} cutting blocks · ${program.stats.nG0} rapids · ${roughTxt} + ${params.strategy.finish}${detailTxt}`);
+}
+
+function showAdvisory(analysis) {
+  view3d.setCollisions(program.segments, analysis.findings);
+  const first = analysis.findings[0];
+  ui.collisionWarn(analysis, first ? segToLine[first.segIdx] + 1 : 0);
+}
+
+/**
+ * Simulated verification (core/residue.js): play the whole program through a
+ * private stock in a worker and diff the result against the final skin. The
+ * reply paints the 2D residue layer, adds `cutgouge` findings to the 3D
+ * overlay and fills the gouge / rest readout. Stale replies are dropped.
+ */
+function runResidueAnalysis(L, R0, grid) {
+  residue = null;
+  view2d.setResidue(null);
+  const id = ++residueSeq;
+  const worker = getPlanWorker();
+  if (!worker) { ui.residueDisplay(null, 'unavailable'); return; }
+  const finalAllow = params.strategy.detail ? params.allowance.detail : params.allowance.finish;
+  const floor = buildFloor(design, stock, finalAllow);
+  ui.residueDisplay(null, 'checking…');
+  worker.postMessage({
+    type: 'residue',
+    id,
+    program: { segments: program.segments },
+    ctx: {
+      floor, stock: { length: L, R0 }, grid,
+      tools: params.tools, feeds: params.feeds, allow: finalAllow, tol: 0.05,
+    },
+  }, [floor.buffer]);
+}
+
+/** Lazily start the planning worker; null when workers are unavailable. */
+function getPlanWorker() {
+  if (planWorker) return planWorker;
+  if (typeof Worker === 'undefined') return null;
+  try {
+    planWorker = new Worker(new URL('./app/plan-worker.js', import.meta.url), { type: 'module' });
+    planWorker.onmessage = onWorkerMessage;
+    planWorker.onerror = (e) => {
+      busy = false;
+      ui.status(`Planner worker error: ${e.message || 'failed'}`, true);
+    };
+  } catch (err) {
+    planWorker = null;
+  }
+  return planWorker;
+}
+
+function onWorkerMessage({ data }) {
+  if (data.type === 'generate') {
+    if (data.id !== planSeq) return; // superseded by a newer rebuild
+    if (data.error) { busy = false; ui.status(`Toolpath error: ${data.error}`, true); return; }
+    const L = clamp(params.stock.length || 200, 10, 360);
+    const R0 = clamp(params.stock.diameter || 50, 6, 120) / 2;
+    applyProgram(unpackProgram(data.packed), L, R0, gridFor(L, R0), pendingOk);
+    pendingOk = null;
+    return;
+  }
+  if (data.type === 'residue') {
+    if (data.id !== residueSeq || !program) return;
+    if (data.error) { ui.residueDisplay(null, data.error); return; }
+    residue = data.res;
+    view2d.setResidue(residue);
+    ui.residueDisplay(residue);
+    showAdvisory(collide.mergeAnalyses(sim.analysis, residue.findings));
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -340,4 +440,9 @@ rebuild('Ready — press ▶ to machine');
 requestAnimationFrame(frame);
 
 // QA/test hook (read-only): lets external scripts inspect scene geometry.
-window.__dbg = { view3d, view2d, stock, sim, params, collide, get program() { return program; } };
+window.__dbg = {
+  view3d, view2d, stock, sim, params, collide,
+  get program() { return program; },
+  get residue() { return residue; },
+  get busy() { return busy; },
+};

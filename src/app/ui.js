@@ -86,6 +86,7 @@ export class UI {
     $('sel-ftool').value = this.params.tools.finish.type;
     $('sel-dtool').value = this.params.tools.detail.type;
     $('sel-detail').value = this.params.strategy.detail ? 'on' : 'off';
+    $('sel-scallop').value = this.params.strategy.scallop ? 'on' : 'off';
   }
 
   _bindPanel() {
@@ -111,6 +112,8 @@ export class UI {
       'sel-finish': ['strategy', 'finish', 'str'],
       'num-pitch': ['strategy', 'pitch', 'num'],
       'num-astep': ['strategy', 'angularStep', 'num'],
+      'num-tol': ['strategy', 'tolerance', 'num'],
+      'sel-scallop': ['strategy', 'scallop', 'bool'],
       'num-fstep': ['tools.finish', 'stepover', 'num'],
       'sel-ftool': ['tools.finish', 'type', 'str'],
       'num-fdia': ['tools.finish', 'diameter', 'num'],
@@ -253,6 +256,7 @@ export class UI {
     $('chk-p-rough').addEventListener('change', (e) => this.h.onToggle('rough', e.target.checked));
     $('chk-p-finish').addEventListener('change', (e) => this.h.onToggle('finish', e.target.checked));
     $('chk-p-rapid').addEventListener('change', (e) => this.h.onToggle('rapid', e.target.checked));
+    $('chk-residue').addEventListener('change', (e) => this.h.onToggle('residue', e.target.checked));
   }
 
   /** Master toolpath switch off → dim + disable the per-group path checkboxes. */
@@ -330,6 +334,21 @@ export class UI {
   }
 
   removed(cm3) { $('lbl-removed').textContent = `${cm3.toFixed(1)} cm³`; }
+
+  /**
+   * Simulated gouge / rest-material readout (core/residue.js). `res` null with
+   * a note while the worker runs or when it is unavailable.
+   */
+  residueDisplay(res, note = '') {
+    const el = $('lbl-residue');
+    if (!el) return;
+    if (!res) { el.textContent = note || '–'; el.className = ''; return; }
+    const g = res.maxGouge > res.tol ? `−${res.maxGouge.toFixed(2)}` : '0';
+    const r = res.maxResidue > res.tol ? `+${res.maxResidue.toFixed(2)}` : '0';
+    el.textContent = `${g} / ${r} mm`;
+    el.className = res.maxGouge > res.tol ? 'bad' : '';
+    el.title = res.summary;
+  }
 
   status(msg, isError = false) {
     const el = $('status');

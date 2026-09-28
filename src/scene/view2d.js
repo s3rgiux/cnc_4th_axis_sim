@@ -31,6 +31,11 @@ export class View2D {
     // Design-contour ghost (2D counterpart of view3D's target ghost).
     this.ghostVisible = true;
     this.ghostContours = [];
+    // Simulated residue layer (core/residue.js): red = gouge, blue = rest.
+    this.residue = null;
+    this.residueVisible = true;
+    this.resImg = document.createElement('canvas');
+    this.resCtx = this.resImg.getContext('2d');
     this.seekPts = null; // Float64Array triples (dist, u, v)
     this.R0 = 25; this.L = 200;
     this._toolR = 3;
@@ -111,6 +116,33 @@ export class View2D {
   }
 
   setGhostVisible(v) { this.ghostVisible = v; }
+  setResidueVisible(v) { this.residueVisible = v; }
+
+  /** Cache the residue diff as an RGBA layer (null clears it). */
+  setResidue(res) {
+    this.residue = res;
+    if (!res) return;
+    const { nx, nth, diff, tol } = res;
+    this.resImg.width = nth;
+    this.resImg.height = nx;
+    const id = this.resCtx.createImageData(nth, nx);
+    const d = id.data;
+    const full = 1.0; // mm of deviation that saturates the tint
+    for (let c = 0; c < nx * nth; c++) {
+      const v = diff[c];
+      const p = c * 4;
+      if (v < -tol) {          // gouge: red
+        d[p] = 255; d[p + 1] = 48; d[p + 2] = 64;
+        d[p + 3] = Math.round(90 + 150 * Math.min(1, (-v - tol) / full));
+      } else if (v > tol) {    // rest material: blue
+        d[p] = 70; d[p + 1] = 130; d[p + 2] = 255;
+        d[p + 3] = Math.round(60 + 140 * Math.min(1, (v - tol) / full));
+      } else {
+        d[p + 3] = 0;
+      }
+    }
+    this.resCtx.putImageData(id, 0, 0);
+  }
 
   /** Marching-squares iso-contours of a target grid → flat [u0,v0,u1,v1,…].
    *  Gives the 2D map a "design blueprint" layer showing what the finished
@@ -197,6 +229,9 @@ export class View2D {
     this.imgCtx.putImageData(id, 0, 0);
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(this.img, 0, 0, nth, nx, mx, my, mw, mh);
+    if (this.residue && this.residueVisible && this.residue.nx === nx && this.residue.nth === nth) {
+      ctx.drawImage(this.resImg, 0, 0, nth, nx, mx, my, mw, mh);
+    }
     ctx.strokeStyle = '#2a3547';
     ctx.strokeRect(mx, my, mw, mh);
 

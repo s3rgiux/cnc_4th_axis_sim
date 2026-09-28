@@ -47,10 +47,14 @@ makeHeightmapDesign(proj,...)    core/mesh.js       ── if an STL/OBJ was imp
         │        └── both produce the SAME interface:
         │            { targetRadius(u,v), profileRadius(v), minTarget(), meta }
         ▼
-generateProgram({design,stock,tools,allowance,strategy,feeds,clearance})
-        │   core/toolpath.js — three phases (rough → finish → detail), each
-        │   with its own cutter + allowance floor; groups tagged per phase
+generateProgram({design,stock,tools,allowance,strategy,feeds,clearance,grid})
+        │   core/toolpath.js — three phases (rough → finish → detail). Each
+        │   phase's FLOOR is a tool-offset surface (core/offset.js): tip(X,A) =
+        │   lowest tip height at which the cutter volume clears target+allow.
+        │   Sweeps are sampled by chordal tolerance (core/adaptive.js);
+        │   waterline passes come from core/contour.js.
         │   → { segments:[{mode,X,Z,A,F,group}], … }   (machine-agnostic)
+        │   (runs inside app/plan-worker.js in the browser; packed via core/pack.js)
         ▼
 emitGcode(program, meta)          core/gcode.js     → text + seg→line map (terminal)
         │
@@ -62,6 +66,11 @@ Simulator.load(program, ctx)           app/sim.js       → distance table, play
         │   └── also runs analyzeProgram() once          (core/collision.js)
         │       → sim.analysis {findings, counts, ok, summary}  (advisory only)
         │       → view3d.setCollisions (red overlay) + ui.collisionWarn (amber line)
+        │   └── plan-worker 'residue': analyzeResidue()        (core/residue.js)
+        │       plays the program through a private Simulator + stock, diffs the
+        │       final radii against min(target+finalAllow, R0) → gouge/rest stats,
+        │       per-segment `cutgouge` findings (merged into the overlay), and
+        │       the 2D residue layer (view2d.setResidue)
         ▼  (per animation frame, given a pose {X,Z,A,F})
 View3D.draw   ── rebuild stock mesh from radii, spin rotor, move cutter
 View2D.draw   ── paint radii as heatmap, iso-contour ghost, path lines, cursor
@@ -94,7 +103,18 @@ src/core/                 DOM-free, fully unit-tested
   unroll.js               all rotary/unroll transforms (listed above)
   profiles.js             PROFILES, PATTERNS, makeProfileInterpolator, makeDesign
   mesh.js                 parseSTL, parseOBJ, projectToCylinder, makeHeightmapDesign
-  toolpath.js             generateProgram (+ indexed/spiral/helical/raster)
+  offset.js               makeOffsetSurface → {tipAt, upperAt, lowerAt, tipAtBrute}
+                          exact per-cell inverse of stock.cutAt for flat/ball/V-bit,
+                          + rim-attached samples so the floor is continuous, +
+                          pruning bounds (ring/column) so a point costs 2–15 µs
+  adaptive.js             adaptiveLine: seed → bisect on chordal deviation →
+                          greedy merge; a step in the floor becomes a vertical move
+  contour.js              isoContours (edge-chained marching squares, wrapped φ),
+                          slopeGrid (steep/shallow split)
+  toolpath.js             generateProgram (+ indexed/spiral/helical/hybrid/
+                          waterline/raster, constant scallop, air-turn skipping)
+  residue.js              buildFloor, residueStats, analyzeResidue
+  pack.js                 packProgram / unpackProgram (worker transfer)
   gcode.js                emitGcode, buildSegToLine, fmt1
   collision.js            static advisory checks: rapidsGougeCheck (G0 below the
                           finished surface = gouge; axial G0 below R0+clearance =
@@ -104,7 +124,10 @@ src/core/                 DOM-free, fully unit-tested
 src/stock/
   stock.js                CylindricalStock: heightmap, analytic cutting, ΔV
 src/app/
-  sim.js                  Simulator: distance playback, sub-step cutting, seek
+  sim.js                  Simulator: distance playback, sub-step cutting, seek,
+                          setFloor → segGouge (per-segment gouge attribution)
+  plan-worker.js          Worker: 'generate' (design spec → packed program) and
+                          'residue' (program + floor grid → analysis)
   ui.js                   UI: control panel, transport, DRO, G-code terminal, import
 src/scene/
   view3d.js               View3D: rotor, live stock mesh, ghost, path overlays
@@ -117,6 +140,44 @@ src/scene/
 src/main.js               bootstrap: state, handlers, rebuild() wiring
 src/config.js             DEFAULTS for every parameter
 ```
+
+### The tool-offset surface (core/offset.js) — why toolpaths stopped gouging
+
+v1.0 put the tool TIP on `target + allowance`. That is only right where the
+surface normal is radial: a ball of radius Rt on a flank of slope β gouges
+`Rt(1−cosβ)/cosβ`, a flat endmill `Rt·tanβ` from its corner. Simulated, the
+step-shaft lost 7 mm at its shoulders and the diamond pattern 6 mm off its
+ridges. `makeOffsetSurface(design, tool, allow, stock, grid)` returns
+`tipAt(x, A)` = max over the footprint of the per-cell requirement, where the
+requirement is the exact inverse of the matching branch in `stock.cutAt`:
+
+| tool | cell at (Δx, θ) with target T is safe when |
+|---|---|
+| flat | `Zc ≥ min(T·cosθ, f·cosθ/|sinθ| + M)`, `f = √(Rt²−Δx²)` |
+| ball | `Zc+Rt ≥ T·cosθ + √(Rt²−Δx²−T²sin²θ)`, or (radicand < 0) `≥ f/|sinθ| + M` |
+| V-bit | cone regime `Zc ≥ T·cosθ − max(0,d−Rt)/tanα`; under the tip flat `Zc ≥ T` |
+
+`M` (0.05 mm) guards the heightmap model's cliffs: at the instant a flat
+endmill's plane intersection re-enters the footprint or a ball just grazes a
+wall column, the model deletes the whole column above the contact (a heightmap
+has no overhangs). Two more details make the surface usable:
+
+- **Rim samples.** Cells alone make the floor a staircase in X and a comb in A
+  (a wall-top cell only constrains while it is inside the footprint and its
+  ray is within a fraction of a degree of the tool's plane). Evaluating the
+  design at points attached to the tool's rim restores continuity; the cells
+  stay in the max so the result is still exact against the simulator.
+- **Pruning.** Columns and rings are visited outward from the cell under the
+  axis with monotone upper bounds (`locMax` window maxima), so a flat region
+  costs one ring per column. `tipAtBrute` is the unpruned oracle used in tests.
+
+`adaptive.js` then samples each (X, A) sweep: seed at `angularStep`, bisect
+while the mid/quarter points deviate from the chord by more than `tolerance`,
+turn a residual step into an explicit vertical move on the safe side, and
+greedily merge collinear samples (capped at 10° / 25 mm per block so the
+overlays that draw a block as one straight rotor-space line stay honest).
+Worst-case simulated gouge is about 3× `tolerance`; `tests/residue.test.mjs`
+proves every preset and strategy stays under 0.05 mm.
 
 ### CylindricalStock (stock/stock.js)
 - Grid `nx × nth`; `radii` is `Float32Array(nx·nth)`, `radii[i·nth+j]` = radius
@@ -181,7 +242,10 @@ src/config.js             DEFAULTS for every parameter
   (parse + projection + demo-leg integration incl. seam continuity and feature
   survival), `tests/collision.test.mjs` (gouge/envelope/overtravel detection,
   swept-cylinder AABB, and a false-positive guard proving every rough×finish
-  combo the generator emits is collision-clean).
+  combo the generator emits is collision-clean), `tests/offset.test.mjs`
+  (analytic lifts, pruned-vs-brute oracle, cut-at-offset never gouges, sampler
+  step handling), `tests/residue.test.mjs` (every preset and strategy simulates
+  gouge-free within 0.05 mm; the legacy tip-on-surface planner is shown to gouge).
 - `verify.mjs` — headless Chrome (playwright-core + swiftshader) drives the
   real UI end to end and writes `shots/*.png`; asserts carve volume removal,
   continuous-A presence, import flow, error reporting, carriage/stock clearance

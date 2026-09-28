@@ -41,10 +41,16 @@ export const DEFAULTS = {
     roughPitch: 4,            // spiral roughing: axial advance per revolution (mm/rev)
     indexes: 12,              // indexed roughing: discrete A positions per level
     finish: 'helical',        // 'helical' | 'raster'
-    pitch: 3,                 // helical finishing: axial advance per revolution (mm/rev)
-    angularStep: 2,           // helix sampling resolution (deg of A per G-code block)
+    pitch: 2,                 // helical finishing: axial advance per revolution (mm/rev)
+                              //   Ø4 ball → scallop 2−√(4−1) ≈ 0.27 mm before detailing
+    angularStep: 2,           // coarse seed for adaptive sampling (deg of A)
+    tolerance: 0.015,         // chordal deviation allowed between block and floor (mm);
+                              //   worst-case simulated gouge ≈ 3× this
+    scallop: true,            // helical: shrink pitch on axial slopes (constant scallop)
+    offset: true,             // plan on the tool-offset surface (false = naive tip-on-surface)
     detail: true,             // third phase: same pass shape, smaller tool
-    detailPitch: 1,           // detailing helix pitch (mm/rev)
+    detailPitch: 0.5,         // detailing helix pitch (mm/rev): Ø1 ball → scallop ≈ 0.07 mm
+                              //   (1 mm = 2·Rt would leave 0.5 mm ridges)
   },
   feeds: {
     rough: 1200,              // mm/min
