@@ -33,12 +33,15 @@ DOM. **No build step, no framework, no backend.**
   X moves, and the spindle/tool being hard to see.
 - **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — module map, the
   design-as-function seam, data flow, and the mesh-import projection details.
+- **[`docs/IMPROVEMENTS.md`](docs/IMPROVEMENTS.md)** — the toolpath/machining
+  assessment (measured gouges of the v1.0 planner), the alternative approaches
+  considered, and what was implemented.
 
 ## Quick start
 
 ```bash
 npm run serve          # zero-dependency Node static server → http://127.0.0.1:8090
-npm test               # 44 unit tests for core math / strategies / stock / collisions
+npm test               # 67 unit tests: math / strategies / offsets / stock / residue / collisions
 ```
 
 ES modules do not run from `file://`, hence the tiny static server — the app
@@ -69,11 +72,17 @@ node verify.mjs        # boots the UI, plays, seeks, switches strategies, screen
    leave 0.1 mm (set 0 to cut to exact design). Every phase picks *flat
    endmill / ball-nose / **V-bit*** (engraving cone — choose the included
    angle); each section shows a live cross-section preview with dimensions.
-4. **Strategy** – roughing *off / indexed faceting sweeps / spiral helix* plus
-   finishing *continuous helical* or *raster (parallel 2D passes)*; detailing
-   replays the finishing shape with the small tool. Each phase stair-steps at
-   `target + its own allowance`, so no phase ever digs into the next one's
-   skin, and the spindle visibly swaps cutters as each phase plays.
+4. **Strategy** – roughing *off / indexed faceting sweeps / spiral helix*
+   (spiral turns that would only cut air are hopped by rapid) plus finishing
+   *continuous helical*, *hybrid* (helical + constant-Z waterline passes on
+   walls steeper than 40°), *waterline* (constant-Z contours only) or
+   *raster* (zig-zag parallel 2D passes with skim links); detailing replays
+   the finishing shape with the small tool. Every cutting move is planned on
+   the **tool-offset surface**: the lowest tip height at which the whole
+   cutter volume (ball, flat corner or V-cone) clears `target + allowance`,
+   so a flank never bites a neighbouring wall. Blocks are sampled by
+   **chordal tolerance** (dense on beads, one long block on flats) and the
+   helix pitch shrinks on axial slopes for a **constant scallop**.
 5. **⚙ Generate Toolpath** then press **▶** (Space). Scrub with the timeline,
    step one block with ◀▮ / ▮▶, click anywhere in the 2D map to jump there.
    **⬇ Export G-code** downloads `part.nc`.
@@ -81,6 +90,13 @@ node verify.mjs        # boots the UI, plays, seeks, switches strategies, screen
    rapids that break below the finished surface or travel axially inside the
    raw-stock envelope, and X/Z overtravel are listed on an amber warning line
    and painted red in the 3D view. Advisory only — playback is never blocked.
+7. **Residue check** — the whole program is also *simulated* in a Web Worker
+   the moment it is generated, and the final surface is diffed against the
+   design skin: the **Gouge / rest** readout gives the deepest cut below the
+   skin and the tallest rest material; the 2D map's **residue map** layer
+   paints gouges red and rest material blue; any feed block that broke the
+   skin joins the collision overlay. Planning itself also runs in the worker,
+   so the UI stays live while a dense program is sampled.
 
 ### Importing a real 3D model (STL / OBJ)
 
@@ -128,7 +144,13 @@ src/core/                   DOM-free pure logic (fully unit-tested)
                             → imported heightmap design (same targetRadius seam)
   profiles.js               profile presets, spiral patterns, custom-JSON parser,
                             monotone-cubic interpolator → targetRadius(U,V)
+  offset.js                 tool-offset (drop-cutter) surface: exact inverse of
+                            the flat/ball/V-bit cut formulas, rim-attached samples
+  adaptive.js               chordal-tolerance sampling of (X,A) sweeps, step-safe
+  contour.js                chained marching-squares iso-contours (waterline)
   toolpath.js               strategy generators → {mode,X,Z,A,F,group} segments
+  residue.js                simulated verification: final surface vs design skin
+  pack.js                   typed-array program encoding for the worker boundary
   gcode.js                  post-processor: merged axis words per block,
                             continuous A, header/footer, seg→line map
   collision.js              static advisory checks: rapid gouge/envelope,
@@ -136,7 +158,8 @@ src/core/                   DOM-free pure logic (fully unit-tested)
 src/stock/stock.js          cylindrical heightmap r(x,φ); analytic flat/ball/
                             V-bit cut-down roots; monotone removal; ΔV accounting
 src/app/sim.js              distance-based playback, sub-stepped cutting,
-                            backward-seek by re-simulation
+                            backward-seek by re-simulation, per-segment gouge hook
+src/app/plan-worker.js      Web Worker: toolpath generation + residue analysis
 src/app/ui.js               control panel, transport, DRO, live G-code terminal
 src/scene/view3d.js         Three.js viewport: rotor group, stock mesh rebuilt
                             per frame, ghost, path overlays
@@ -148,6 +171,8 @@ src/scene/view2d.js         unrolled map canvas: removal heatmap, target
 tests/core.test.mjs         node:test suite (math, strategies, G-code, stock)
 tests/mesh.test.mjs         STL/OBJ parse, cylinder projection, demo-leg import
 tests/collision.test.mjs    rapid gouge/envelope, overtravel, swept-cylinder AABB
+tests/offset.test.mjs       analytic lifts, brute-force oracle, cut-at-offset never gouges
+tests/residue.test.mjs      every preset/strategy simulates gouge-free; legacy planner gouges
 scripts/make-demo-leg.mjs   generates assets/table-leg.stl (baroque demo model)
 verify.mjs                  optional headless browser smoke test
 ```

@@ -86,11 +86,18 @@
       <div class="toolpv"><svg id="pv-finish" viewBox="0 0 248 74" preserveAspectRatio="xMidYMid meet"></svg></div>
       <label>Strategy<select id="sel-finish">
         <option value="helical" selected>Continuous helical</option>
+        <option value="hybrid">Hybrid (helical + waterline on steep walls)</option>
+        <option value="waterline">Waterline (constant-Z contours)</option>
         <option value="raster">Raster (parallel 2D passes)</option>
       </select></label>
-      <label>Helix pitch (mm/rev)<input type="number" id="num-pitch" min="0.25" max="20" step="0.25" value="3"></label>
+      <label>Helix pitch (mm/rev)<input type="number" id="num-pitch" min="0.25" max="20" step="0.25" value="2"></label>
       <label>Stepover (mm)<input type="number" id="num-fstep" min="0.25" max="15" step="0.25" value="2"></label>
-      <label>A sample step (deg)<input type="number" id="num-astep" min="0.5" max="10" step="0.25" value="2"></label>
+      <label title="Coarse seed spacing for adaptive sampling; blocks are refined where the surface bends">Seed step (deg A)<input type="number" id="num-astep" min="0.5" max="10" step="0.25" value="2"></label>
+      <label title="Max deviation between a programmed block and the tool-offset surface">Chord tolerance (mm)<input type="number" id="num-tol" min="0.005" max="0.2" step="0.005" value="0.015"></label>
+      <label title="Shrink the helix pitch on axial slopes so the scallop height stays constant">Constant scallop<select id="sel-scallop">
+        <option value="on" selected>On (pitch·cos β)</option>
+        <option value="off">Off (fixed pitch)</option>
+      </select></label>
       <label>Cutter<select id="sel-ftool">
         <option value="flat">Flat endmill</option>
         <option value="ball" selected>Ball-nose</option>
@@ -108,7 +115,7 @@
         <option value="off">— off —</option>
         <option value="on" selected>On (smaller tool)</option>
       </select></label>
-      <label>Helix pitch (mm/rev)<input type="number" id="num-dpitch" min="0.25" max="10" step="0.25" value="1"></label>
+      <label>Helix pitch (mm/rev)<input type="number" id="num-dpitch" min="0.1" max="10" step="0.1" value="0.5"></label>
       <label>Stepover (mm)<input type="number" id="num-dstep" min="0.1" max="5" step="0.1" value="0.5"></label>
       <label>Cutter<select id="sel-dtool">
         <option value="flat">Flat endmill</option>
@@ -148,6 +155,7 @@
         <label class="sub"><input type="checkbox" id="chk-p-detail" checked> detail</label>
         <label class="sub"><input type="checkbox" id="chk-p-rapid"> rapids</label>
         <label><input type="checkbox" id="chk-ghost" checked> target ghost</label>
+        <label title="2D: simulated result vs design — red = gouge below the final skin, blue = rest material"><input type="checkbox" id="chk-residue" checked> residue map</label>
         <span id="dblhint">dbl-click: re-frame · P: paths</span>
       </div>
     </div>
@@ -184,6 +192,7 @@
       <div class="stat"><span>Cut distance</span><b id="lbl-cutdist">0 mm</b></div>
       <div class="stat"><span>Est. time</span><b id="lbl-est">0:00</b></div>
       <div class="stat"><span>Removed</span><b id="lbl-removed">0 cm³</b></div>
+      <div class="stat" title="Simulated final surface vs design skin: deepest gouge / highest rest material"><span>Gouge / rest</span><b id="lbl-residue">–</b></div>
     </section>
 
     <div id="status"></div>

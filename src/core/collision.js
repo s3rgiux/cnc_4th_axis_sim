@@ -30,6 +30,7 @@ export const KIND = {
   GOUGE: 'gouge',           // rapid below the finished surface
   ENVELOPE: 'envelope',     // axial rapid below raw-stock clearance height
   OVERTRAVEL: 'overtravel', // axis beyond machine limits
+  CUTGOUGE: 'cutgouge',     // feed move whose tool VOLUME cut below the final skin
 };
 
 /** Severity for "worst finding per segment" (higher = worse). */
@@ -190,16 +191,36 @@ export function analyzeProgram(program, { design = null, stock, clearance, limit
   findings.push(...overtravelCheck(program.segments, limits));
   findings.sort((a, b) => a.segIdx - b.segIdx);
 
-  const counts = { gouge: 0, envelope: 0, overtravel: 0 };
-  for (const f of findings) counts[f.kind]++;
+  return summarize(findings);
+}
+
+/** Counts + human summary for a sorted findings list. */
+export function summarize(findings) {
+  const counts = { gouge: 0, envelope: 0, overtravel: 0, cutgouge: 0 };
+  let deepest = 0;
+  for (const f of findings) {
+    counts[f.kind] = (counts[f.kind] || 0) + 1;
+    if (f.kind === KIND.CUTGOUGE && f.depth > deepest) deepest = f.depth;
+  }
   const parts = [];
   if (counts.gouge) parts.push(`${counts.gouge} rapid gouge${counts.gouge > 1 ? 's' : ''} below finished surface`);
   if (counts.envelope) parts.push(`${counts.envelope} axial rapid${counts.envelope > 1 ? 's' : ''} inside stock envelope`);
   if (counts.overtravel) parts.push(`${counts.overtravel} overtravel block${counts.overtravel > 1 ? 's' : ''}`);
+  if (counts.cutgouge) parts.push(`${counts.cutgouge} feed block${counts.cutgouge > 1 ? 's' : ''} cut below the final skin (max ${deepest.toFixed(2)} mm)`);
   return {
     findings,
     counts,
     ok: findings.length === 0,
     summary: parts.join(' · '),
   };
+}
+
+/**
+ * Merge the static analysis with the simulated residue analysis (which runs
+ * later, off the main thread in the browser) into one advisory result.
+ */
+export function mergeAnalyses(staticAnalysis, residueFindings) {
+  const findings = [...staticAnalysis.findings, ...(residueFindings || [])];
+  findings.sort((a, b) => a.segIdx - b.segIdx);
+  return summarize(findings);
 }

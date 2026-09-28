@@ -38,6 +38,15 @@
  */
 import { wrap, wrapPi, RAD_PER_DEG } from '../core/unroll.js';
 
+/** UI tool descriptor {type, diameter, angle} → cutter geometry {R, shape, angle}. */
+export function toolGeom(t) {
+  return {
+    R: Math.max((t?.diameter ?? 4) / 2, 0.01),
+    shape: t?.type || 'ball',
+    angle: t?.angle || 90,
+  };
+}
+
 export class CylindricalStock {
   /**
    * @param {number} length workpiece length (mm), spanning x ∈ [0, length]
@@ -66,6 +75,7 @@ export class CylindricalStock {
     this.version = (this.version || 0) + 1; // mesh-dirty generation counter
     this.radii.fill(this.R0);
     this.removedMm3 = 0;
+    this.lastMaxGouge = 0;
   }
 
   get removedCm3() {
@@ -92,9 +102,14 @@ export class CylindricalStock {
    * @param {{R:number, shape?:'flat'|'ball'|'vbit', angle?:number, ball?:boolean}} tool
    *   shape wins; `ball` boolean is accepted as a legacy alias. `angle` is the
    *   V-bit included angle (deg), R its tip-flat radius.
+   * @param {Float32Array|null} floor optional per-cell floor radii (same
+   *   nx×nth layout). When given, `this.lastMaxGouge` is set to the deepest
+   *   cut below its floor made by this pose (0 when none) — the hook the
+   *   residue analysis uses to attribute gouges to program segments.
    * @returns {boolean} true if any material was removed
    */
-  cutAt(xc, zc, aDeg, tool) {
+  cutAt(xc, zc, aDeg, tool, floor = null) {
+    this.lastMaxGouge = 0;
     const Rt = Math.max(tool.R, 0.01);
     const shape = tool.shape || (tool.ball ? 'ball' : 'flat');
     const zcEff = Math.max(zc, 0);
@@ -196,6 +211,10 @@ export class CylindricalStock {
         radii[rowBase + j] = rNew;
         this.removedMm3 += (r0 * r0 - rNew * rNew) * cellAngleVol;
         removed = true;
+        if (floor) {
+          const g = floor[rowBase + j] - rNew;
+          if (g > this.lastMaxGouge) this.lastMaxGouge = g;
+        }
       }
     }
     if (removed) this.version++;

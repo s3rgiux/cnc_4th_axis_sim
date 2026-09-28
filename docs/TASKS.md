@@ -7,7 +7,7 @@ methodology and `docs/ARCHITECTURE.md` for how the pieces fit.
 
 **Verify before/after any change:**
 ```
-node --test "tests/**/*.test.mjs"   # pure-logic suite (currently 44/44)
+node --test "tests/**/*.test.mjs"   # pure-logic suite (currently 67/67, ~3 min: residue sims)
 node serve.mjs 8090 & node verify.mjs   # headless browser smoke test
 ```
 
@@ -51,9 +51,41 @@ node serve.mjs 8090 & node verify.mjs   # headless browser smoke test
       sub-millimetre geometry to carve into. Rollback knob: the cell targets +
       clamps live in one place (`DEFAULTS.grid`).
 
+- [x] **Toolpath overhaul (see `docs/IMPROVEMENTS.md`)**:
+  - **Tool-offset floors** (`core/offset.js`): every phase plans on the
+    drop-cutter surface of its own tool; the step-shaft's 7 mm shoulder gouge
+    and the diamond pattern's shaved ridges are gone (0.000 mm on every preset).
+  - **Adaptive chordal sampling** (`core/adaptive.js`) + block merge: the
+    default leg went from 84k blocks to ~23k while resolving beads finer.
+  - **Constant-scallop helix**, **zig-zag raster with skim links**,
+    **air-turn skipping** in spiral roughing.
+  - **Waterline / hybrid finishing** (`core/contour.js`): constant-Z passes on
+    steep walls (hybrid = helical + waterline where slope > 40°).
+  - **Simulated residue verification** (`core/residue.js`, `app/plan-worker.js`):
+    gouge / rest readout, 2D residue layer, `cutgouge` findings in the overlay.
+  - Planning + verification run in a Web Worker; `__dbg.busy` for the smoke test.
+  - Defaults tightened: finish pitch 2 mm (Ø4 ball → 0.27 mm scallop), detail
+    pitch 0.5 mm (Ø1 ball → 0.07 mm; the old 1 mm = 2·Rt left 0.5 mm ridges).
+
 ---
 
 ## Roadmap — prioritized
+
+### 🔵 Toolpath / machining (continuation of `docs/IMPROVEMENTS.md`)
+
+- **Rest roughing / in-process stock in the generator** — keep a
+  `CylindricalStock` while planning so indexed roughing can also skip air,
+  links can skim the *actual* stock instead of `R0 + clearance`, and a rest
+  pass can target only where finishing left more than a threshold.
+- **2D pocketing / adaptive clearing** per z-level on the unrolled map
+  (constant engagement) — the roughing counterpart of planning in 2D.
+- **Turn the profile, carve the pattern** — lathe-style profile pass for the
+  axisymmetric body, 4-axis carving confined to pattern regions.
+- **Generation speed** — the offset surface costs 2–15 µs per sample; dense
+  patterns (diamond) take ~8 s in the worker. A per-phase offset cache or a
+  coarser seed for roughing would halve it.
+- **Residue map in 3D** (paint the stock mesh by `diff`) — the 2D layer exists.
+
 
 ### 🔴 M-series: machine realism & collisions (the current gaps)
 
